@@ -21,7 +21,7 @@ class MultiAgentOrchestrator:
     def __init__(
         self,
         registry: ToolRegistry,
-        provider_url: str = "http://localhost:20128/v1",
+        provider_url: str = "https://omniroute.lupixele.online/v1",
         api_key: str = "",
         model: str = "antigravity/gemini-3.8-flash-tiered",
         max_steps_per_agent: int = 6,

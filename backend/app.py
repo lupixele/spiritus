@@ -71,7 +71,7 @@ def load_config() -> Dict[str, Any]:
     import os
     env_key = os.environ.get("HERMES_CUSTOM_OMNIROUTE_API_KEY") or os.environ.get("AUTO_API_KEY") or ""
     cfg = {
-        "provider_url": "http://localhost:20128/v1",
+        "provider_url": "https://omniroute.lupixele.online/v1",
         "api_key": env_key,
         "active_model": "antigravity/gemini-3.8-flash-tiered",
         "custom_models": [
@@ -164,7 +164,7 @@ def get_config():
     cfg = load_config()
     api_key = cfg.get("api_key", "")
     return {
-        "provider_url": cfg.get("provider_url", "http://localhost:20128/v1"),
+        "provider_url": cfg.get("provider_url", "https://omniroute.lupixele.online/v1"),
         "active_model": cfg.get("active_model", "antigravity/gemini-3.8-flash-tiered"),
         "custom_models": cfg.get("custom_models", []),
         "max_steps": cfg.get("max_steps", 8),
@@ -309,7 +309,7 @@ async def stream_agent(req: StreamRequest):
     session_store.append_turn(session_id, user_turn)
 
     registry = create_agent_registry()
-    provider_url = cfg.get("provider_url", "http://localhost:20128/v1")
+    provider_url = cfg.get("provider_url", "https://omniroute.lupixele.online/v1")
     api_key = cfg.get("api_key", "")
     max_steps = int(cfg.get("max_steps", 8))
     run_id = f"run_{uuid.uuid4().hex[:8]}"
