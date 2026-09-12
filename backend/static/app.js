@@ -50,6 +50,36 @@ function initGlobe() {
 }
 
 function bindUIEvents() {
+  // Tab Switching between Agent Chat and Tactical Data
+  const tabChat = document.getElementById('tab-btn-chat');
+  const tabTactical = document.getElementById('tab-btn-tactical');
+  const paneChat = document.getElementById('pane-chat-view');
+  const paneTactical = document.getElementById('pane-tactical-view');
+
+  if (tabChat && tabTactical && paneChat && paneTactical) {
+    tabChat.addEventListener('click', () => {
+      tabChat.classList.add('active');
+      tabTactical.classList.remove('active');
+      paneChat.style.display = 'flex';
+      paneTactical.style.display = 'none';
+    });
+
+    tabTactical.addEventListener('click', () => {
+      tabTactical.classList.add('active');
+      tabChat.classList.remove('active');
+      paneTactical.style.display = 'flex';
+      paneChat.style.display = 'none';
+    });
+  }
+
+  // Capability chips in Chat workspace
+  document.querySelectorAll('.quick-caps-scroll .cap-chip').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const capNum = btn.dataset.cap;
+      runCapabilityPrompt(capNum);
+    });
+  });
+
   // Mode toggles
   const btnGlobe = document.getElementById('btn-mode-globe');
   const btnExercise = document.getElementById('btn-mode-exercise');
@@ -358,6 +388,22 @@ function renderTacticalNetwork() {
     `;
   }
 
+  // Draw Highlighted Safe Evacuation Corridor (Gold Route)
+  if (activeEvacPath && activeEvacPath.length > 1) {
+    for (let i = 0; i < activeEvacPath.length - 1; i++) {
+      const u = NODE_SVG_COORDS[activeEvacPath[i]];
+      const v = NODE_SVG_COORDS[activeEvacPath[i + 1]];
+      if (u && v) {
+        svgHtml += `
+          <line x1="${u.x}" y1="${u.y}" x2="${v.x}" y2="${v.y}" 
+                stroke="#f3c56b" stroke-width="6" opacity="0.9" stroke-linecap="round">
+            <animate attributeName="opacity" values="0.9;0.4;0.9" dur="1.8s" repeatCount="indefinite" />
+          </line>
+        `;
+      }
+    }
+  }
+
   svgHtml += `</svg>`;
   container.innerHTML = svgHtml;
 }
@@ -553,21 +599,35 @@ function processAgentEvent(event) {
     } else if (event.text) {
       appendTrace('assistant', event.text);
     }
+  } else if (event.type === 'done') {
+    // Refresh data only when agent run concludes to avoid wiping UI mid-sentence
     refreshAllData();
   } else if (event.type === 'error') {
     appendTrace('error', event.message);
   }
 }
 
+// Evacuation Route Highlight State
+let activeEvacPath = [];
+
 function updateEvacCard(routeResult) {
   const card = document.getElementById('route-status-display');
-  if (!card) return;
+  if (routeResult.safe_route_found && routeResult.path_nodes) {
+    activeEvacPath = routeResult.path_nodes;
+  } else {
+    activeEvacPath = [];
+  }
 
+  // Auto-render route on the tactical graph if open
+  renderTacticalNetwork();
+
+  if (!card) return;
   if (routeResult.safe_route_found) {
     card.innerHTML = `
       <span class="tag-badge tag-success" style="align-self:flex-start;">CORRIDOR APPROVED</span>
       <p style="font-size:11px; margin-top:4px;"><strong>Target:</strong> ${routeResult.destination_shelter_name} (${routeResult.destination_shelter_id})</p>
       <p style="font-size:11px;"><strong>Distance:</strong> ${routeResult.distance_km} km | <strong>Path:</strong> ${routeResult.path_nodes.join(' → ')}</p>
+      <div style="font-size:10px; color:var(--mint); margin-top:4px; font-weight:700;">ROUTE HIGHLIGHTED ON TACTICAL MAP (Gold Corridor)</div>
       <div style="font-size:10px; color:var(--ink-muted); margin-top:2px;">Invariants Checked: ${routeResult.closure_invariants_checked} closures verified clear.</div>
     `;
   } else {
@@ -580,14 +640,43 @@ function updateEvacCard(routeResult) {
 }
 
 function appendTrace(role, text) {
-  const log = document.getElementById('agent-trace-log');
-  if (!log) return;
+  const thread = document.getElementById('chat-messages-thread');
+  if (!thread) return;
 
-  const div = document.createElement('div');
-  div.className = `log-entry ${role}`;
-  div.textContent = text;
-  log.appendChild(div);
-  log.scrollTop = log.scrollHeight;
+  const msgDiv = document.createElement('div');
+  msgDiv.className = `chat-message ${role}-message`;
+
+  let author = 'SPIRITUS AGENT';
+  let timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+  if (role === 'user') {
+    author = 'INCIDENT COMMANDER';
+  } else if (role === 'tool') {
+    author = 'TOOL OBSERVER';
+  } else if (role === 'critic') {
+    author = 'SAFETY CRITIC AUDITOR';
+  } else if (role === 'error') {
+    author = 'SYSTEM ERROR';
+  }
+
+  msgDiv.innerHTML = `
+    <div class="msg-header">
+      <span class="msg-author">${author}</span>
+      <span class="msg-time">${timeStr}</span>
+    </div>
+    <div class="msg-body">${escapeHtml(text)}</div>
+  `;
+
+  thread.appendChild(msgDiv);
+  thread.scrollTop = thread.scrollHeight;
+}
+
+function escapeHtml(str) {
+  if (typeof str !== 'string') str = JSON.stringify(str, null, 2);
+  return str
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
 }
 
 function handleItemSelection(data) {

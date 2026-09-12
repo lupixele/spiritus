@@ -142,70 +142,91 @@
           </div>
         </div>
 
+        <!-- Tactical Canvas Overlay: Road Network Graph & Clear Evac Route -->
         <div class="tactical-canvas-shell" id="tactical-map-wrapper" style="display:none;">
           <div class="tactical-titlebar">
-            <span class="tactical-title">VISAKHAPATNAM TACTICAL ROAD NETWORK GRAPH</span>
-            <span style="font-size: 11px; color: var(--ink-muted);">Green: Clear | Red: Blocked/Collapsed | Amber: Evac Shelter</span>
+            <span class="tactical-title">TACTICAL EVACUATION ROUTE & TRANSIT GRAPH</span>
+            <span style="font-size: 11px; color: var(--ink-muted);">Green: Clear | Red: Blocked/Collapsed | Gold: Evac Corridor</span>
           </div>
           <div class="tactical-svg-frame" id="tactical-svg-container"></div>
         </div>
-
-        <!-- Real-Time Agent Command Toolbar -->
-        <div class="agent-toolbar">
-          <div class="agent-input-row">
-            <input type="text" id="agent-user-prompt" class="agent-field" placeholder="Query 10 capabilities or ask agent (e.g. 'Evacuate Port N1 to safe shelter; report risk and road cuts')">
-            <button class="agent-submit-btn" id="btn-execute-agent">Decide & Act</button>
-          </div>
-        </div>
       </section>
 
-      <!-- Right Panel: Capabilities Matrix, Decision Inspection & SSE Trace -->
+      <!-- Right Panel: Dedicated Disaster Agent Chat & Response Workspace -->
       <aside class="panel-shell right-shell">
         <div class="panel-bar">
-          <span class="panel-heading">OPERATIONAL DECISION MATRIX</span>
+          <div class="panel-tabs">
+            <button class="panel-tab active" id="tab-btn-chat">Agent Chat & Swarm</button>
+            <button class="panel-tab" id="tab-btn-tactical">Tactical Data & Evac</button>
+          </div>
+          <span class="pulse-led" title="Swarm Ready"></span>
         </div>
 
-        <!-- 10 Capabilities Quick Launchers -->
-        <div class="capabilities-grid">
-          <div class="cap-pill" data-cap="1" title="Highest risk & causes">1. Risk & Causes</div>
-          <div class="cap-pill" data-cap="2" title="Affected needing aid">2. Affected / Aid</div>
-          <div class="cap-pill" data-cap="3" title="Blocked unsafe roads">3. Unsafe Roads</div>
-          <div class="cap-pill" data-cap="4" title="Shelter capacity remaining">4. Shelter Capacity</div>
-          <div class="cap-pill" data-cap="5" title="Rescue/medical priorities">5. Triage Priority</div>
-          <div class="cap-pill" data-cap="6" title="Supply shortfalls">6. Supply Deficits</div>
-          <div class="cap-pill" data-cap="7" title="Safe evacuation route">7. Safe Evac Route</div>
-          <div class="cap-pill" data-cap="8" title="Conditional exposure scenario">8. Shock Sim</div>
-          <div class="cap-pill" data-cap="9" title="Resource deployments">9. Resources</div>
-          <div class="cap-pill" data-cap="10" title="Top three actions">10. Top 3 Actions</div>
-        </div>
+        <!-- Tab 1: First-Class Chat & Multi-Agent Workspace (Active) -->
+        <div class="chat-workspace-pane" id="pane-chat-view">
+          <!-- Capabilities Quick Launcher Bar -->
+          <div class="quick-caps-bar">
+            <span class="quick-caps-label">QUICK AUDIT:</span>
+            <div class="quick-caps-scroll">
+              <button class="cap-chip" data-cap="1">1. Risks</button>
+              <button class="cap-chip" data-cap="2">2. Impact</button>
+              <button class="cap-chip" data-cap="3">3. Roads</button>
+              <button class="cap-chip" data-cap="4">4. Shelters</button>
+              <button class="cap-chip" data-cap="5">5. Triage</button>
+              <button class="cap-chip" data-cap="6">6. Deficits</button>
+              <button class="cap-chip" data-cap="7">7. Evac Route</button>
+              <button class="cap-chip" data-cap="8">8. Aftershock</button>
+              <button class="cap-chip" data-cap="9">9. Deploy</button>
+              <button class="cap-chip" data-cap="10">10. Top 3 Actions</button>
+            </div>
+          </div>
 
-        <!-- Evacuation Route Verification Box -->
-        <div class="card-block">
-          <div class="card-heading">DETERMINISTIC ROUTE VERIFICATION</div>
-          <div class="route-info-box" id="route-status-display">
-            <span class="tag-badge" style="background: var(--surface-hover); color: var(--ink-soft); align-self: flex-start;">PENDING QUERY</span>
-            <p style="font-size: 11px; color: var(--ink-soft);">Select an origin node or issue prompt to compute verified corridor.</p>
+          <!-- Conversation Thread: Full Height, Dedicated Room -->
+          <div class="chat-messages-container" id="chat-messages-thread">
+            <div class="chat-message system-message">
+              <div class="msg-header">
+                <span class="msg-author">SPIRITUS ORCHESTRATOR</span>
+                <span class="msg-time">System Ready</span>
+              </div>
+              <div class="msg-body">
+                Autonomous Disaster Response Swarm initialized. Ingesting live USGS earthquakes, NASA wildfires, and regional weather. Ask a question or launch a capability audit below.
+              </div>
+            </div>
+          </div>
+
+          <!-- Bottom Attached Chat Composer -->
+          <div class="chat-composer-dock">
+            <div class="composer-inner">
+              <input type="text" id="agent-user-prompt" class="composer-field" placeholder="Ask agent (e.g. 'Evacuate Port N1 to safe shelter; report risk and road cuts')">
+              <button class="composer-send-btn" id="btn-execute-agent">Send ➔</button>
+            </div>
           </div>
         </div>
 
-        <!-- Shelters & Capacity Table -->
-        <div class="card-block">
-          <div class="card-heading">SHELTERS & REMAINING OCCUPANCY</div>
-          <table class="shelter-table" id="shelter-table">
-            <thead>
-              <tr><th>Shelter</th><th>Cap</th><th>Occupied</th><th>Status</th></tr>
-            </thead>
-            <tbody id="shelter-table-body">
-              <tr><td colspan="4">Loading shelters...</td></tr>
-            </tbody>
-          </table>
-        </div>
+        <!-- Tab 2: Tactical Evacuation & Shelter Data -->
+        <div class="tactical-workspace-pane" id="pane-tactical-view" style="display: none;">
+          <!-- Evacuation Route Verification Box -->
+          <div class="card-block">
+            <div class="card-heading">DETERMINISTIC ROUTE VERIFICATION</div>
+            <div class="route-info-box" id="route-status-display">
+              <span class="tag-badge" style="background: var(--surface-hover); color: var(--ink-soft); align-self: flex-start;">PENDING QUERY</span>
+              <p style="font-size: 11px; color: var(--ink-soft); margin-top: 4px;">Click '7. Evac Route' or issue an evacuation prompt to compute a verified safe corridor.</p>
+            </div>
+          </div>
 
-        <!-- SSE Stream Trace -->
-        <div class="card-block trace-block">
-          <div class="card-heading">AUTONOMOUS DECIDE-ACT-OBSERVE TRACE</div>
-          <div class="stream-scroll" id="agent-trace-log">
-            <div class="log-entry system">Spiritus Autonomous Decision Runtime initialized. Ready for task instructions.</div>
+          <!-- Shelters & Capacity Table -->
+          <div class="card-block" style="flex: 1; overflow: hidden; display: flex; flex-direction: column;">
+            <div class="card-heading">SHELTERS & REMAINING OCCUPANCY</div>
+            <div style="flex: 1; overflow-y: auto;">
+              <table class="shelter-table" id="shelter-table">
+                <thead>
+                  <tr><th>Shelter</th><th>Cap</th><th>Occupied</th><th>Status</th></tr>
+                </thead>
+                <tbody id="shelter-table-body">
+                  <tr><td colspan="4">Loading shelters...</td></tr>
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       </aside>
