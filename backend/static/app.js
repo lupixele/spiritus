@@ -131,6 +131,60 @@ function bindUIEvents() {
   // Refresh
   document.getElementById('btn-refresh-data').addEventListener('click', refreshAllData);
 
+  // Telemetry Modal Controls
+  const telemModal = document.getElementById('telemetry-modal');
+  const btnOpenTelem = document.getElementById('btn-open-telemetry');
+  const btnCloseTelem = document.getElementById('btn-close-telemetry');
+
+  async function updateTelemetryUI() {
+    try {
+      const [cfgRes, exRes] = await Promise.all([
+        fetch('/api/config'),
+        fetch('/api/exercise/state')
+      ]);
+      if (cfgRes.ok) {
+        const cfg = await cfgRes.json();
+        const mEl = document.getElementById('telem-model');
+        const pEl = document.getElementById('telem-provider');
+        if (mEl) mEl.textContent = cfg.active_model || 'antigravity/gemini-3.8-flash-tiered';
+        if (pEl) pEl.textContent = cfg.provider_url || 'https://omniroute.lupixele.online/v1';
+      }
+      if (exRes.ok) {
+        const ex = await exRes.json();
+        const rEl = document.getElementById('telem-revision');
+        const cEl = document.getElementById('telem-cuts');
+        const sEl = document.getElementById('telem-shelter-pct');
+        const misEl = document.getElementById('telem-missions');
+
+        if (rEl) rEl.textContent = `#${ex.revision || 1}`;
+        if (cEl) cEl.textContent = `${(ex.disrupted_roads || []).length} blocked`;
+        if (misEl) misEl.textContent = `${(ex.aid_requests || []).length} active`;
+
+        if (sEl && ex.shelters) {
+          const total = ex.shelters.reduce((acc, s) => acc + (s.max_capacity || 0), 0);
+          const occ = ex.shelters.reduce((acc, s) => acc + (s.current_occupancy || 0), 0);
+          const pct = total > 0 ? Math.round((occ / total) * 100) : 0;
+          sEl.textContent = `${pct}% (${occ}/${total} beds)`;
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to update telemetry', e);
+    }
+  }
+
+  if (btnOpenTelem && telemModal) {
+    btnOpenTelem.addEventListener('click', () => {
+      updateTelemetryUI();
+      telemModal.style.display = 'flex';
+    });
+  }
+
+  if (btnCloseTelem && telemModal) {
+    btnCloseTelem.addEventListener('click', () => {
+      telemModal.style.display = 'none';
+    });
+  }
+
   // Settings Modal Controls
   const modal = document.getElementById('settings-modal');
   const btnOpenSettings = document.getElementById('btn-open-settings');

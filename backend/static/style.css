@@ -1060,3 +1060,39 @@ body {
   box-shadow: 0 20px 50px rgba(0,0,0,0.5);
   overflow: hidden;
 }
+
+/* Telemetry Dashboard Modal */
+.telemetry-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  padding: 16px;
+  background: var(--graphite-2);
+}
+
+.telemetry-card {
+  background: var(--surface-solid);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.telem-label {
+  font-size: 9px;
+  font-family: var(--font-mono);
+  color: var(--ink-muted);
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.telem-val {
+  font-size: 13px;
+  font-family: var(--font-mono);
+  font-weight: 700;
+  color: var(--mint);
+  word-break: break-all;
+}

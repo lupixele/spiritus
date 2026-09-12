@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Spiritus — Disaster Decision & Operational Response Workbench</title>
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/style.css?v=2.1">
   <script>
     // Apply theme preference before first paint to prevent flash
     const savedTheme = localStorage.getItem('spiritus_theme') || 
@@ -45,9 +45,50 @@
         </div>
         <button class="btn-theme-toggle" id="btn-toggle-theme" title="Toggle Light / Dark Theme">Theme ◐</button>
         <button class="chip" id="btn-open-settings" title="Configure Base URL & Model">Settings ⚙</button>
+        <button class="chip" id="btn-open-telemetry" title="View Real-Time System Telemetry">Telemetry 📊</button>
         <button class="btn-run-audit" id="btn-quick-audit" title="Run Autonomous 10-Capabilities Audit">10-Cap Audit</button>
       </div>
     </header>
+
+    <!-- Telemetry Modal -->
+    <div id="telemetry-modal" class="modal-backdrop" style="display:none;">
+      <div class="modal-card" style="max-width: 520px;">
+        <div class="panel-bar">
+          <span class="panel-heading">SYSTEM & SWARM TELEMETRY</span>
+          <button class="chip" id="btn-close-telemetry">✕</button>
+        </div>
+        <div class="telemetry-grid">
+          <div class="telemetry-card">
+            <span class="telem-label">ACTIVE MODEL</span>
+            <span class="telem-val" id="telem-model">--</span>
+          </div>
+          <div class="telemetry-card">
+            <span class="telem-label">AI PROVIDER BASE URL</span>
+            <span class="telem-val" style="font-size:11px;" id="telem-provider">--</span>
+          </div>
+          <div class="telemetry-card">
+            <span class="telem-label">INCIDENT REVISION</span>
+            <span class="telem-val" id="telem-revision">--</span>
+          </div>
+          <div class="telemetry-card">
+            <span class="telem-label">SHELTER BED OCCUPANCY</span>
+            <span class="telem-val" id="telem-shelter-pct">--</span>
+          </div>
+          <div class="telemetry-card">
+            <span class="telem-label">CLOSED / CUT ROAD SEGMENTS</span>
+            <span class="telem-val" style="color:var(--coral);" id="telem-cuts">--</span>
+          </div>
+          <div class="telemetry-card">
+            <span class="telem-label">RECORDED RESCUE MISSIONS</span>
+            <span class="telem-val" style="color:var(--amber);" id="telem-missions">--</span>
+          </div>
+        </div>
+        <div style="padding: 10px 16px; background: var(--surface-raised); border-top: 1px solid var(--line); font-size: 11px; color: var(--ink-soft); display: flex; justify-content: space-between;">
+          <span>Backend Port: <strong>8420</strong></span>
+          <span>Status: <strong style="color:var(--mint);">ONLINE (FastAPI + SSE)</strong></span>
+        </div>
+      </div>
+    </div>
 
     <!-- Settings Dialog -->
     <div id="settings-modal" class="modal-backdrop" style="display:none;">
@@ -233,6 +274,6 @@
     </main>
   </div>
 
-  <script type="module" src="/static/app.js"></script>
+  <script type="module" src="/static/app.js?v=2.1"></script>
 </body>
 </html>
