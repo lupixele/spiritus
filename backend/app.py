@@ -23,6 +23,26 @@ from core.tools import (
     KeyValueStoreTool,
     ToolRegistry,
 )
+from core.disaster_tools import (
+    LiveDisasterFeedTool,
+    RegionalRiskAssessmentTool,
+    AffectedPopulationAidTool,
+    RoadNetworkAuditTool,
+    ShelterCapacityTool,
+    RescuePrioritizationTool,
+    SupplyShortfallsTool,
+    EvacuationRouteTool,
+    ScenarioSimulationTool,
+    ResourceDeploymentTool,
+    ExecuteDispatchTool,
+)
+from disaster.live_feeds import get_all_disaster_feeds
+from disaster.scenario_engine import (
+    get_exercise_summary,
+    init_scenario_db,
+    inject_scenario_shock,
+    reset_scenario_to_baseline,
+)
 
 logger = logging.getLogger("spiritus.app")
 PROJECT_DIR = Path(__file__).parent.resolve()
@@ -48,15 +68,11 @@ app.add_middleware(
 
 
 def load_config() -> Dict[str, Any]:
-    if CONFIG_PATH.exists():
-        try:
-            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            pass
-    return {
+    import os
+    env_key = os.environ.get("HERMES_CUSTOM_OMNIROUTE_API_KEY") or os.environ.get("AUTO_API_KEY") or ""
+    cfg = {
         "provider_url": "http://localhost:20128/v1",
-        "api_key": "",
+        "api_key": env_key,
         "active_model": "antigravity/gemini-3.8-flash-tiered",
         "custom_models": [
             "antigravity/gemini-3.8-flash-tiered",
@@ -65,6 +81,16 @@ def load_config() -> Dict[str, Any]:
         ],
         "max_steps": 8,
     }
+    if CONFIG_PATH.exists():
+        try:
+            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                saved = json.load(f)
+                cfg.update(saved)
+                if not cfg.get("api_key") and env_key:
+                    cfg["api_key"] = env_key
+        except Exception:
+            pass
+    return cfg
 
 
 def save_config(cfg: Dict[str, Any]):
@@ -74,14 +100,26 @@ def save_config(cfg: Dict[str, Any]):
 
 def create_agent_registry() -> ToolRegistry:
     """
-    Primary tool registry factory.
-    TO ADD TOOLS FOR TOMORROW'S DOMAIN:
-    Simply instantiate and call registry.register(MyCustomTool()) here.
+    Primary tool registry factory with all general and disaster operational capabilities.
     """
     registry = ToolRegistry()
+    # General utilities
     registry.register(CalculatorTool())
     registry.register(DatasetLookupTool())
     registry.register(KeyValueStoreTool())
+
+    # Disaster Operational Tools (10 Mandatory Capabilities)
+    registry.register(LiveDisasterFeedTool())
+    registry.register(RegionalRiskAssessmentTool())
+    registry.register(AffectedPopulationAidTool())
+    registry.register(RoadNetworkAuditTool())
+    registry.register(ShelterCapacityTool())
+    registry.register(RescuePrioritizationTool())
+    registry.register(SupplyShortfallsTool())
+    registry.register(EvacuationRouteTool())
+    registry.register(ScenarioSimulationTool())
+    registry.register(ResourceDeploymentTool())
+    registry.register(ExecuteDispatchTool())
     return registry
 
 
@@ -378,6 +416,63 @@ async def stream_agent(req: StreamRequest):
             "X-Accel-Buffering": "no",
         },
     )
+
+
+# --------------------------------------------------------------------
+# Disaster Domain & Operational Exercise Endpoints
+# --------------------------------------------------------------------
+class ExerciseShockRequest(BaseModel):
+    shock_type: str  # bridge_collapse, shelter_overflow, supply_shortage
+
+
+class RoadDamageRequest(BaseModel):
+    road_id: str
+    status: str = "blocked"  # blocked, damaged, hazardous, normal
+    reason: Optional[str] = None
+
+
+class ExerciseActionRequest(BaseModel):
+    request_id: str
+    resource_id: str
+    expected_revision: Optional[int] = None
+
+
+@app.get("/api/feeds/disasters")
+async def get_disaster_feeds(lat: float = Query(17.6868), lon: float = Query(83.2185)):
+    return await get_all_disaster_feeds(lat=lat, lon=lon)
+
+
+@app.get("/api/exercise/state")
+def get_current_exercise_state():
+    return get_exercise_summary()
+
+
+@app.post("/api/exercise/reset")
+def reset_exercise_endpoint():
+    return reset_scenario_to_baseline()
+
+
+@app.post("/api/exercise/shock")
+def inject_shock_endpoint(req: ExerciseShockRequest):
+    return inject_scenario_shock(req.shock_type)
+
+
+@app.post("/api/exercise/road_status")
+def set_road_status_endpoint(req: RoadDamageRequest):
+    from disaster.scenario_engine import set_road_status
+    res = set_road_status(req.road_id, req.status, req.reason)
+    return res
+
+
+@app.post("/api/exercise/action")
+async def execute_action_endpoint(req: ExerciseActionRequest):
+    dispatch_tool = ExecuteDispatchTool()
+    res = await dispatch_tool.run(
+        request_id=req.request_id,
+        resource_id=req.resource_id,
+        expected_revision=req.expected_revision,
+    )
+    return res.output if res.success else {"error": res.error or res.output.get("message", "Commit rejected")}
 
 
 # --------------------------------------------------------------------

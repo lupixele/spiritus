@@ -51,15 +51,30 @@ class MultiAgentOrchestrator:
                 "details": "Emergency lockdown policy is active. Unverified automated operations prohibited.",
             })
 
-        # Check rows or text
-        rows = plan_data.get("rows", [])
-        for row in rows:
-            text_cells = " ".join(str(v).lower() for v in row)
-            if "fail" in text_cells or "crash" in text_cells or "fatal" in text_cells:
-                violations.append({
-                    "type": "UNHANDLED_FAILURE_DETECTED",
-                    "details": f"Candidate plan references unhandled error state: {text_cells[:80]}",
-                })
+        # Check road closure violations & shelter overcapacity from exercise state if present
+        try:
+            from disaster.scenario_engine import get_exercise_summary
+            ex = get_exercise_summary()
+            disrupted_names = [r["name"].lower() for r in ex["disrupted_roads"]]
+            full_shelters = [s["name"].lower() for s in ex["shelters"] if s["status"] != "open" or s["current_occupancy"] >= s["max_capacity"]]
+            
+            rows = plan_data.get("rows", [])
+            for row in rows:
+                text_cells = " ".join(str(v).lower() for v in row)
+                for d_road in disrupted_names:
+                    if d_road in text_cells and "avoid" not in text_cells and "bypass" not in text_cells:
+                        violations.append({
+                            "type": "ROAD_CLOSURE_SAFETY_VIOLATION",
+                            "details": f"Plan routes through compromised corridor '{d_road}', which is blocked/collapsed.",
+                        })
+                for f_sh in full_shelters:
+                    if f_sh in text_cells and "divert" not in text_cells and "full" not in text_cells:
+                        violations.append({
+                            "type": "SHELTER_OVERCAPACITY_VIOLATION",
+                            "details": f"Plan routes evacuees to shelter '{f_sh}' which is already at 100% capacity.",
+                        })
+        except Exception:
+            pass
 
         is_approved = len(violations) == 0
         return {
