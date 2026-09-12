@@ -580,6 +580,26 @@ function triggerCapabilityDemo(capNum) {
   submitAgentInstructionWithText(p);
 }
 
+function runCapabilityPrompt(capNum) {
+  const prompts = {
+    "1": "assess_regional_risk: Which areas in the Visakhapatnam operational sector are currently at highest risk, and what is causing the risk?",
+    "2": "audit_affected_population: Which areas are already affected, how many casualties are reported, and who requires immediate assistance?",
+    "3": "audit_road_network: Which roads or arterial transit corridors are currently blocked or unsafe for emergency vehicles?",
+    "4": "inspect_shelter_capacity: Which emergency shelters are open right now, and how much capacity and drinking water is available?",
+    "5": "prioritize_rescue_medical: Which affected areas require immediate rescue or medical triage assistance? Rank all active missions.",
+    "6": "calculate_supply_shortfalls: Are any emergency shelters or relief centers running low on food, water, medicines, or essential trauma supplies?",
+    "7": "compute_evacuation_route: Which evacuation route should people in high-risk Port N1 take right now to reach an open shelter?",
+    "8": "simulate_worsening_scenario: If a secondary M5.5 aftershock hits, which coastal areas and bridges are likely to be affected next?",
+    "9": "recommend_resource_deployment: Where should additional NDRF rescue teams, ambulances, and supply convoys be deployed?",
+    "10": "recommend_resource_deployment: What are the top three immediate executive actions authorities should take right now to stabilize the situation?",
+  };
+
+  const p = prompts[capNum] || `Execute capability ${capNum}`;
+  const input = document.getElementById('agent-user-prompt');
+  if (input) input.value = p;
+  submitAgentInstructionWithText(p);
+}
+
 function submitAgentInstruction() {
   const input = document.getElementById('agent-user-prompt');
   const text = (input.value || '').trim();
@@ -589,7 +609,40 @@ function submitAgentInstruction() {
 
 function submitAgentInstructionWithText(text) {
   appendTrace('user', text);
+  // Clear input
+  const input = document.getElementById('agent-user-prompt');
+  if (input) input.value = '';
+
+  // Add Thinking Indicator
+  showThinkingIndicator();
   startAgentStream(text);
+}
+
+let thinkingIndicatorEl = null;
+
+function showThinkingIndicator() {
+  removeThinkingIndicator();
+  const thread = document.getElementById('chat-messages-thread');
+  if (!thread) return;
+
+  thinkingIndicatorEl = document.createElement('div');
+  thinkingIndicatorEl.className = 'chat-message system-message';
+  thinkingIndicatorEl.id = 'thinking-indicator';
+  thinkingIndicatorEl.innerHTML = `
+    <div style="display:flex; align-items:center; justify-content:center; gap:8px;">
+      <span class="pulse-led" style="background:var(--mint); width:8px; height:8px;"></span>
+      <span style="font-family:var(--font-mono); font-size:11px; color:var(--mint);">Swarm Orchestrator & Specialists Auditing...</span>
+    </div>
+  `;
+  thread.appendChild(thinkingIndicatorEl);
+  thread.scrollTop = thread.scrollHeight;
+}
+
+function removeThinkingIndicator() {
+  if (thinkingIndicatorEl && thinkingIndicatorEl.parentNode) {
+    thinkingIndicatorEl.parentNode.removeChild(thinkingIndicatorEl);
+  }
+  thinkingIndicatorEl = null;
 }
 
 async function startAgentStream(instruction) {
@@ -648,15 +701,17 @@ function processAgentEvent(event) {
     const status = event.audit?.approved ? 'APPROVED' : 'REJECTED';
     appendTrace('critic', `[CRITIC AUDIT] ${status}: ${event.audit?.notes || ''}`);
   } else if (event.type === 'final_answer' || event.type === 'thought') {
+    removeThinkingIndicator();
     if (event.content) {
       appendTrace('assistant', event.content);
     } else if (event.text) {
       appendTrace('assistant', event.text);
     }
   } else if (event.type === 'done') {
-    // Refresh data only when agent run concludes to avoid wiping UI mid-sentence
+    removeThinkingIndicator();
     refreshAllData();
   } else if (event.type === 'error') {
+    removeThinkingIndicator();
     appendTrace('error', event.message);
   }
 }
@@ -748,12 +803,28 @@ function appendTrace(role, text) {
 function formatMarkdown(str) {
   if (typeof str !== 'string') str = JSON.stringify(str, null, 2);
   let html = escapeHtml(str);
+
+  // Headers: ### Header -> <h4>Header</h4>, ## Header -> <h3>Header</h3>
+  html = html.replace(/^###\s+(.*$)/gim, '<h4 style="color:var(--mint); margin: 8px 0 4px 0; font-size: 12px; font-weight:800;">$1</h4>');
+  html = html.replace(/^##\s+(.*$)/gim, '<h3 style="color:var(--ink); margin: 10px 0 4px 0; font-size: 13px; font-weight:800; border-bottom: 1px solid var(--line); padding-bottom: 2px;">$1</h3>');
+
   // Bold **text**
-  html = html.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/\*\*(.*?)\*\*/g, '<strong style="color:var(--ink); font-weight:700;">$1</strong>');
+
   // Inline code `text`
-  html = html.replace(/`(.*?)`/g, '<code>$1</code>');
-  // Line break bullets
-  html = html.replace(/\n\s*-\s+(.*)/g, '<br>• $1');
+  html = html.replace(/`(.*?)`/g, '<code style="background:var(--graphite); padding:2px 5px; border-radius:4px; font-family:var(--font-mono); font-size:11px; color:var(--mint); border:1px solid var(--line);">$1</code>');
+
+  // Markdown lists & numbers:
+  // Numbers: 1. Item
+  html = html.replace(/^\s*(\d+)\.\s+(.*)/gim, '<div style="margin-left:8px; margin-top:3px;"><span style="color:var(--mint); font-weight:700; font-family:var(--font-mono);">$1.</span> $2</div>');
+
+  // Bullets: - Item or * Item
+  html = html.replace(/^\s*[-*]\s+(.*)/gim, '<div style="margin-left:12px; margin-top:2px;">• $1</div>');
+
+  // Line breaks
+  html = html.replace(/\n\n/g, '<div style="height:6px;"></div>');
+  html = html.replace(/\n/g, '<br>');
+
   return html;
 }
 
