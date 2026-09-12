@@ -44,9 +44,39 @@
           <span id="feed-status-summary">Live Feeds Active</span>
         </div>
         <button class="btn-theme-toggle" id="btn-toggle-theme" title="Toggle Light / Dark Theme">Theme ◐</button>
+        <button class="chip" id="btn-open-settings" title="Configure Base URL & Model">Settings ⚙</button>
         <button class="btn-run-audit" id="btn-quick-audit" title="Run Autonomous 10-Capabilities Audit">10-Cap Audit</button>
       </div>
     </header>
+
+    <!-- Settings Dialog -->
+    <div id="settings-modal" class="modal-backdrop" style="display:none;">
+      <div class="modal-card">
+        <div class="panel-bar">
+          <span class="panel-heading">AI ENDPOINT & MODEL CONFIGURATION</span>
+          <button class="chip" id="btn-close-settings">✕</button>
+        </div>
+        <div style="padding: 16px; display: flex; flex-direction: column; gap: 12px;">
+          <label style="font-size: 11px; font-family: var(--font-mono); color: var(--ink-soft);">
+            PROVIDER BASE URL (OpenAI-compatible)
+            <input type="text" id="cfg-provider-url" class="agent-field" style="margin-top: 4px; width: 100%;" placeholder="https://omniroute.lupixele.online/v1">
+          </label>
+          <label style="font-size: 11px; font-family: var(--font-mono); color: var(--ink-soft);">
+            ACTIVE MODEL ID
+            <input type="text" id="cfg-active-model" class="agent-field" style="margin-top: 4px; width: 100%;" placeholder="antigravity/gemini-3.8-flash-tiered">
+          </label>
+          <label style="font-size: 11px; font-family: var(--font-mono); color: var(--ink-soft);">
+            API KEY (Optional if routed through OmniRoute)
+            <input type="password" id="cfg-api-key" class="agent-field" style="margin-top: 4px; width: 100%;" placeholder="••••••••">
+          </label>
+          <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px;">
+            <button class="chip" id="btn-cancel-settings">Cancel</button>
+            <button class="chip active" id="btn-save-settings" style="background: var(--mint-deep); color: #000; font-weight: 700;">Save & Apply</button>
+          </div>
+          <div id="cfg-status-msg" style="font-size: 11px; color: var(--mint); display: none;">Configuration saved successfully.</div>
+        </div>
+      </div>
+    </div>
 
     <!-- Main 3-Column Layout -->
     <main class="workbench-body">

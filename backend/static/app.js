@@ -101,6 +101,71 @@ function bindUIEvents() {
   // Refresh
   document.getElementById('btn-refresh-data').addEventListener('click', refreshAllData);
 
+  // Settings Modal Controls
+  const modal = document.getElementById('settings-modal');
+  const btnOpenSettings = document.getElementById('btn-open-settings');
+  const btnCloseSettings = document.getElementById('btn-close-settings');
+  const btnCancelSettings = document.getElementById('btn-cancel-settings');
+  const btnSaveSettings = document.getElementById('btn-save-settings');
+  const inputUrl = document.getElementById('cfg-provider-url');
+  const inputModel = document.getElementById('cfg-active-model');
+  const inputKey = document.getElementById('cfg-api-key');
+  const cfgMsg = document.getElementById('cfg-status-msg');
+
+  async function loadConfigIntoModal() {
+    try {
+      const res = await fetch('/api/config');
+      if (res.ok) {
+        const d = await res.json();
+        inputUrl.value = d.provider_url || '';
+        inputModel.value = d.active_model || '';
+        inputKey.value = '';
+        inputKey.placeholder = d.has_api_key ? d.api_key_masked : 'Optional if routed through OmniRoute';
+      }
+    } catch (e) {
+      console.warn('Failed to load config', e);
+    }
+  }
+
+  if (btnOpenSettings && modal) {
+    btnOpenSettings.addEventListener('click', () => {
+      loadConfigIntoModal();
+      modal.style.display = 'flex';
+      cfgMsg.style.display = 'none';
+    });
+  }
+
+  const hideModal = () => { if (modal) modal.style.display = 'none'; };
+  if (btnCloseSettings) btnCloseSettings.addEventListener('click', hideModal);
+  if (btnCancelSettings) btnCancelSettings.addEventListener('click', hideModal);
+
+  if (btnSaveSettings) {
+    btnSaveSettings.addEventListener('click', async () => {
+      const payload = {
+        provider_url: inputUrl.value.trim(),
+        active_model: inputModel.value.trim(),
+      };
+      if (inputKey.value.trim()) {
+        payload.api_key = inputKey.value.trim();
+      }
+      try {
+        const res = await fetch('/api/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        if (res.ok) {
+          cfgMsg.style.display = 'block';
+          setTimeout(() => { hideModal(); }, 900);
+        } else {
+          alert('Failed to save configuration.');
+        }
+      } catch (e) {
+        alert('Network error saving configuration.');
+      }
+    });
+  }
+
   // Judge Controls
   document.getElementById('btn-apply-road-damage').addEventListener('click', applyJudgeRoadDamage);
   document.getElementById('btn-shock-overflow').addEventListener('click', () => applyJudgeShock('shelter_overflow'));

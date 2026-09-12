@@ -40,7 +40,7 @@ from core.tools import ToolRegistry
 
 class TestDisasterDomainAndEngine(unittest.TestCase):
     def setUp(self):
-        reset_scenario_to_baseline()
+        init_scenario_db(force=True)
 
     def test_01_scenario_initialization_and_summary(self):
         summary = get_exercise_summary()
