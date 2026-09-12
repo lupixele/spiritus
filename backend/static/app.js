@@ -1,1547 +1,533 @@
 /**
- * Limen — Autonomous Agent Workbench
- * Specification: "Precision Monolith" (P:\Magnanimity\Projects\Harness\FRONTEND_DESIGN_AUDIT.md)
+ * Spiritus Disaster Decision & Operational Response Workbench Frontend Controller.
+ * 
+ * Manages:
+ * - Real-time USGS earthquake and NASA EONET wildfire observation feed display
+ * - 3D Visual Observatory Globe & 2D Tactical Graph switcher
+ * - Light and Dark theme persistence and live Three.js scene updates
+ * - Interactive judge road damage and shock injection controls
+ * - 10 Mandatory crisis capabilities execution and evidence verification
+ * - Real-time SSE streaming agent thoughts, tool observations, and critic reviews
+ * - Incident revision tracking and race protection alerts
  */
+import { DisasterGlobe } from './globe.js';
 
-(function () {
-  'use strict';
+let globeInstance = null;
+let currentExerciseState = null;
+let liveFeedsData = null;
+let activeFilter = 'all';
+let authoritativeRevision = 1;
 
-  // Application State
-  const state = {
-    config: {
-      provider_url: 'http://localhost:20128/v1',
-      api_key: '',
-      active_model: 'antigravity/gemini-3.8-flash-tiered',
-      custom_models: ['antigravity/gemini-3.8-flash-tiered'],
-      max_steps: 8
-    },
-    activeSessionId: localStorage.getItem('limen_session_id') || '',
-    activeSessionTitle: 'Untitled Run',
-    sessions: [],
-    openTabIds: [], // array of session IDs open in titlebar tabs
-    isStreaming: false,
-    abortController: null,
-    runStatus: 'idle', // 'idle' | 'running' | 'converged' | 'step-limit' | 'interrupted'
-    stepCount: 0,
-    userScrolledUp: false,
-    artifacts: [], // collected plan_artifacts in current session
-    selectedToolForInspect: null,
-    telemetryLogs: []
+const NODE_SVG_COORDS = {
+  "N1": { x: 260, y: 190, name: "Port Area" },
+  "N2": { x: 330, y: 150, name: "Beach Rd" },
+  "N3": { x: 280, y: 130, name: "Jagadamba" },
+  "N4": { x: 120, y: 220, name: "Gajuwaka" },
+  "N5": { x: 360, y: 40,  name: "Madhurawada" },
+  "N6": { x: 80,  y: 90,  name: "Pendurthi" },
+  "N7": { x: 350, y: 180, name: "RK Beach" },
+  "N8": { x: 200, y: 80,  name: "Simhachalam" },
+};
+
+document.addEventListener('DOMContentLoaded', async () => {
+  initGlobe();
+  bindUIEvents();
+  await refreshAllData();
+
+  setInterval(refreshAllData, 30000);
+});
+
+function initGlobe() {
+  const mountEl = document.getElementById('globe-container');
+  if (!mountEl) return;
+
+  globeInstance = new DisasterGlobe(mountEl, {
+    dprCap: 1.0,
+    targetFps: 30,
+    onSelect: handleItemSelection,
+  });
+  globeInstance.init();
+}
+
+function bindUIEvents() {
+  // Mode toggles
+  const btnGlobe = document.getElementById('btn-mode-globe');
+  const btnExercise = document.getElementById('btn-mode-exercise');
+  const globeWrapper = document.getElementById('globe-stage-wrapper');
+  const tacticalWrapper = document.getElementById('tactical-map-wrapper');
+
+  btnGlobe.addEventListener('click', () => {
+    btnGlobe.classList.add('active');
+    btnExercise.classList.remove('active');
+    globeWrapper.style.display = 'block';
+    tacticalWrapper.style.display = 'none';
+  });
+
+  btnExercise.addEventListener('click', () => {
+    btnExercise.classList.add('active');
+    btnGlobe.classList.remove('active');
+    globeWrapper.style.display = 'none';
+    tacticalWrapper.style.display = 'flex';
+    renderTacticalNetwork();
+  });
+
+  // Theme Toggle (Dark / Light)
+  const btnTheme = document.getElementById('btn-toggle-theme');
+  if (btnTheme) {
+    btnTheme.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme') || 'dark';
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('spiritus_theme', next);
+      if (globeInstance) {
+        globeInstance.setTheme(next);
+      }
+      if (tacticalWrapper.style.display !== 'none') {
+        renderTacticalNetwork();
+      }
+    });
+  }
+
+  // Filter chips
+  document.querySelectorAll('.filter-strip .chip').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.filter-strip .chip').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      activeFilter = btn.dataset.filter;
+      renderIncidentFeedList();
+    });
+  });
+
+  // Refresh
+  document.getElementById('btn-refresh-data').addEventListener('click', refreshAllData);
+
+  // Judge Controls
+  document.getElementById('btn-apply-road-damage').addEventListener('click', applyJudgeRoadDamage);
+  document.getElementById('btn-shock-overflow').addEventListener('click', () => applyJudgeShock('shelter_overflow'));
+  document.getElementById('btn-reset-exercise').addEventListener('click', resetExerciseState);
+
+  // Agent prompt submit
+  document.getElementById('btn-execute-agent').addEventListener('click', submitAgentInstruction);
+  document.getElementById('agent-user-prompt').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') submitAgentInstruction();
+  });
+
+  // 10 Capabilities quick buttons
+  document.querySelectorAll('.cap-pill').forEach(badge => {
+    badge.addEventListener('click', () => {
+      const capNum = badge.dataset.cap;
+      triggerCapabilityDemo(capNum);
+    });
+  });
+
+  // Quick 10-cap audit button in topbar
+  document.getElementById('btn-quick-audit').addEventListener('click', () => {
+    submitAgentInstructionWithText("Run comprehensive 10 capabilities operational audit for Visakhapatnam earthquake response. Check all road closures, calculate safe evac corridors from Port N1, inspect shelter capacities, and verify rescue deployment priorities.");
+  });
+}
+
+async function refreshAllData() {
+  try {
+    // 1. Fetch live feeds
+    const feedResp = await fetch('/api/feeds/disasters');
+    if (feedResp.ok) {
+      liveFeedsData = await feedResp.json();
+      updateGlobeFeeds(liveFeedsData);
+      updateWeatherBanner(liveFeedsData.weather);
+    }
+
+    // 2. Fetch exercise state
+    const exResp = await fetch('/api/exercise/state');
+    if (exResp.ok) {
+      currentExerciseState = await exResp.json();
+      authoritativeRevision = currentExerciseState.revision || 1;
+      updateRevisionDisplay(authoritativeRevision);
+      renderShelterTable(currentExerciseState.shelters);
+      if (document.getElementById('tactical-map-wrapper').style.display !== 'none') {
+        renderTacticalNetwork();
+      }
+    }
+
+    renderIncidentFeedList();
+  } catch (err) {
+    console.error("Failed to refresh data:", err);
+  }
+}
+
+function updateRevisionDisplay(rev) {
+  const revEl = document.getElementById('incident-rev-tag');
+  if (revEl) revEl.textContent = `REVISION: #${rev}`;
+}
+
+function updateWeatherBanner(weather) {
+  const el = document.getElementById('vizag-weather-val');
+  if (!el || !weather) return;
+  el.textContent = `${weather.temperature || 28}°C, Wind ${weather.windspeed || 12} km/h (${weather.type})`;
+}
+
+function updateGlobeFeeds(data) {
+  if (!globeInstance) return;
+  const quakes = (data.earthquakes && data.earthquakes.events) || [];
+  const fires = (data.wildfires && data.wildfires.events) || [];
+
+  document.getElementById('count-quakes').textContent = `${quakes.length} (${data.earthquakes?.status || 'live'})`;
+  document.getElementById('count-wildfires').textContent = `${fires.length} (${data.wildfires?.status || 'live'})`;
+
+  globeInstance.setEvents(quakes, fires);
+}
+
+function renderIncidentFeedList() {
+  const listEl = document.getElementById('incident-feed-list');
+  if (!listEl) return;
+  listEl.innerHTML = '';
+
+  // Exercise Card (Synthetic Operation)
+  if (activeFilter === 'all' || activeFilter === 'exercise') {
+    const exCard = document.createElement('div');
+    exCard.className = 'incident-card exercise-highlight';
+    exCard.innerHTML = `
+      <div class="card-top">
+        <span class="tag-badge tag-exercise">SYNTHETIC_EXERCISE</span>
+        <span class="time-label">M6.8 SIMULATION</span>
+      </div>
+      <div class="card-title-text">Visakhapatnam Coastal Response</div>
+      <div class="card-desc-text">Seismic impact zone. ${currentExerciseState?.summary?.disrupted_road_segments || 1} road closures active. Casualties: ${currentExerciseState?.summary?.reported_casualties || 0}.</div>
+    `;
+    exCard.addEventListener('click', () => {
+      document.getElementById('btn-mode-exercise').click();
+    });
+    listEl.appendChild(exCard);
+  }
+
+  // Quakes
+  if (liveFeedsData?.earthquakes?.events && (activeFilter === 'all' || activeFilter === 'earthquakes')) {
+    const quakes = liveFeedsData.earthquakes.events.slice(0, 15);
+    for (const q of quakes) {
+      const card = document.createElement('div');
+      card.className = 'incident-card quake-highlight';
+      card.innerHTML = `
+        <div class="card-top">
+          <span class="tag-badge tag-quake">M${Number(q.mag).toFixed(1)}</span>
+          <span class="time-label">USGS LIVE</span>
+        </div>
+        <div class="card-title-text">${q.place}</div>
+        <div class="card-desc-text">Depth: ${q.depth}km | Lat: ${Number(q.lat).toFixed(2)}, Lon: ${Number(q.lon).toFixed(2)}</div>
+      `;
+      card.addEventListener('click', () => {
+        if (globeInstance) globeInstance.focusLocation(q.lat, q.lon);
+      });
+      listEl.appendChild(card);
+    }
+  }
+
+  // Wildfires
+  if (liveFeedsData?.wildfires?.events && (activeFilter === 'all' || activeFilter === 'wildfires')) {
+    const fires = liveFeedsData.wildfires.events.slice(0, 15);
+    for (const f of fires) {
+      const card = document.createElement('div');
+      card.className = 'incident-card fire-highlight';
+      card.innerHTML = `
+        <div class="card-top">
+          <span class="tag-badge tag-fire">FIRE</span>
+          <span class="time-label">NASA EONET</span>
+        </div>
+        <div class="card-title-text">${f.title}</div>
+        <div class="card-desc-text">Lat: ${Number(f.lat).toFixed(2)}, Lon: ${Number(f.lon).toFixed(2)}</div>
+      `;
+      card.addEventListener('click', () => {
+        if (globeInstance) globeInstance.focusLocation(f.lat, f.lon);
+      });
+      listEl.appendChild(card);
+    }
+  }
+}
+
+function renderTacticalNetwork() {
+  const container = document.getElementById('tactical-svg-container');
+  if (!container || !currentExerciseState) return;
+
+  const edges = currentExerciseState.all_roads || [];
+  const nodes = currentExerciseState.nodes || [];
+  const shelters = currentExerciseState.shelters || [];
+
+  const isLight = document.documentElement.getAttribute('data-theme') === 'light';
+  const normalEdgeColor = isLight ? '#059669' : '#8df6bc';
+  const cutEdgeColor = isLight ? '#dc2626' : '#ff7765';
+  const textColor = isLight ? '#0f172a' : '#f5f3ee';
+  const nodeFill = isLight ? '#ffffff' : '#111a21';
+
+  let svgHtml = `<svg viewBox="0 0 450 300" style="width:100%; height:100%; max-height:480px;">`;
+
+  // Draw Edges
+  for (const e of edges) {
+    const u = NODE_SVG_COORDS[e.source];
+    const v = NODE_SVG_COORDS[e.target];
+    if (!u || !v) continue;
+
+    const isCut = e.status !== 'normal';
+    const strokeColor = isCut ? cutEdgeColor : normalEdgeColor;
+    const strokeWidth = isCut ? '3.5' : '2.0';
+    const dash = isCut ? 'stroke-dasharray="4,3"' : '';
+
+    svgHtml += `
+      <line x1="${u.x}" y1="${u.y}" x2="${v.x}" y2="${v.y}" 
+            stroke="${strokeColor}" stroke-width="${strokeWidth}" ${dash} opacity="0.85">
+        <title>${e.id}: ${e.name} (${e.status})</title>
+      </line>
+    `;
+  }
+
+  // Draw Nodes
+  for (const n of nodes) {
+    const pos = NODE_SVG_COORDS[n.id];
+    if (!pos) continue;
+
+    const hasShelter = shelters.some(s => s.node_id === n.id);
+    const strokeColor = hasShelter ? '#f3c56b' : (isLight ? '#2563eb' : '#60a5fa');
+
+    svgHtml += `
+      <circle cx="${pos.x}" cy="${pos.y}" r="8" fill="${nodeFill}" stroke="${strokeColor}" stroke-width="2.5">
+        <title>${n.id}: ${n.name}</title>
+      </circle>
+      <text x="${pos.x + 10}" y="${pos.y + 4}" fill="${textColor}" font-size="9" font-family="monospace">${n.id}: ${pos.name}</text>
+    `;
+  }
+
+  svgHtml += `</svg>`;
+  container.innerHTML = svgHtml;
+}
+
+function renderShelterTable(shelters = []) {
+  const tbody = document.getElementById('shelter-table-body');
+  if (!tbody) return;
+  tbody.innerHTML = '';
+
+  for (const s of shelters) {
+    const isFull = s.status !== 'open' || s.current_occupancy >= s.max_capacity;
+    const tagClass = isFull ? 'tag-danger' : 'tag-success';
+    const statusText = isFull ? 'FULL' : `${s.remaining_capacity} left`;
+
+    const row = document.createElement('tr');
+    row.innerHTML = `
+      <td><strong>${s.name}</strong><div style="font-size:10px; color:var(--ink-muted);">Node ${s.node_id} | H2O: ${s.water_rations_days}d</div></td>
+      <td>${s.max_capacity}</td>
+      <td>${s.current_occupancy}</td>
+      <td><span class="tag-badge ${tagClass}">${statusText}</span></td>
+    `;
+    tbody.appendChild(row);
+  }
+}
+
+async function applyJudgeRoadDamage() {
+  const roadId = document.getElementById('judge-road-select').value;
+  const status = document.getElementById('judge-status-select').value;
+
+  try {
+    const resp = await fetch('/api/exercise/road_status', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ road_id: roadId, status: status, reason: `Judge injected damage: ${status}` })
+    });
+    const res = await resp.json();
+    if (res.success) {
+      appendTrace('critic', `[JUDGE CONTROL] Road ${roadId} set to ${status}. Authoritative revision bumped to #${res.revision}. Recomputing paths...`);
+      showStaleBanner();
+      await refreshAllData();
+      checkEvacuationRoute('N1');
+    }
+  } catch (err) {
+    console.error("Judge cut failed:", err);
+  }
+}
+
+async function applyJudgeShock(shockType) {
+  try {
+    const resp = await fetch('/api/exercise/shock', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ shock_type: shockType })
+    });
+    const res = await resp.json();
+    appendTrace('critic', `[OPERATIONAL SHOCK] Injected ${shockType}. Shelters saturated. Revision bumped to #${res.revision}.`);
+    showStaleBanner();
+    await refreshAllData();
+  } catch (err) {
+    console.error("Shock failed:", err);
+  }
+}
+
+async function resetExerciseState() {
+  try {
+    const resp = await fetch('/api/exercise/reset', { method: 'POST' });
+    const res = await resp.json();
+    appendTrace('system', `[RESET] Exercise state restored to baseline. Revision: #1.`);
+    hideStaleBanner();
+    await refreshAllData();
+  } catch (err) {
+    console.error("Reset failed:", err);
+  }
+}
+
+function showStaleBanner() {
+  const b = document.getElementById('stale-alert-banner');
+  if (b) {
+    b.style.display = 'block';
+    setTimeout(() => { b.style.display = 'none'; }, 6000);
+  }
+}
+
+function hideStaleBanner() {
+  const b = document.getElementById('stale-alert-banner');
+  if (b) b.style.display = 'none';
+}
+
+async function checkEvacuationRoute(originNode = 'N1') {
+  try {
+    const resp = await fetch('/api/agent/stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        instruction: `Call compute_evacuation_route from origin_node='${originNode}'. If safe route found, report corridor and distance. If blocked or fail closed, report stranded area explicitly.`,
+      })
+    });
+    handleSSEStream(resp);
+  } catch (err) {
+    console.error("Route check error:", err);
+  }
+}
+
+function triggerCapabilityDemo(capNum) {
+  const prompts = {
+    "1": "assess_regional_risk for Vizag Coastal Urban Zone. Report composite risk score and causes.",
+    "2": "get_affected_population_aid urgency_filter='critical'. Report trapped count and locations.",
+    "3": "audit_road_network. List all blocked or impaired road segments.",
+    "4": "query_shelter_capacity. Report open shelters and remaining capacity.",
+    "5": "prioritize_rescue_medical. Rank all rescue operations deterministically.",
+    "6": "calculate_supply_shortfalls. Identify critical water or medical deficits across shelters.",
+    "7": "compute_evacuation_route from origin_node='N1'. Verify road closure invariants and shelter capacity.",
+    "8": "simulate_worsening_scenario event_type='aftershock_m5_5'. Evaluate secondary structural vulnerabilities.",
+    "9": "recommend_resource_deployment. Map available search and rescue teams to high-priority requests.",
+    "10": "Execute top three actions: recommend deployment, compute safe evacuation route, and dispatch top mission.",
   };
 
-  // DOM Elements Cache
-  const el = {
-    // Titlebar
-    titlebarTabsStrip: document.getElementById('titlebar-tabs-strip'),
-    btnNewTab: document.getElementById('btn-new-tab'),
-    globalModelSelect: document.getElementById('global-model-select'),
-    engineStatusDot: document.getElementById('engine-status-dot'),
-    engineStatusLabel: document.getElementById('engine-status-label'),
-    btnTitlebarPing: document.getElementById('btn-titlebar-ping'),
-    btnToggleInspector: document.getElementById('btn-toggle-inspector'),
-    btnOpenSettings: document.getElementById('btn-open-settings'),
+  const p = prompts[capNum] || `Execute capability ${capNum}`;
+  document.getElementById('agent-user-prompt').value = p;
+  submitAgentInstructionWithText(p);
+}
 
-    // Rail & Sidebar
-    workbenchSidebar: document.getElementById('workbench-sidebar'),
-    railBtnSessions: document.getElementById('rail-btn-sessions'),
-    railBtnTools: document.getElementById('rail-btn-tools'),
-    railBtnTelemetry: document.getElementById('rail-btn-telemetry'),
-    railBtnSettings: document.getElementById('rail-btn-settings'),
-    sessionCountBadge: document.getElementById('session-count-badge'),
-    sidebarSessionList: document.getElementById('sidebar-session-list'),
+function submitAgentInstruction() {
+  const input = document.getElementById('agent-user-prompt');
+  const text = (input.value || '').trim();
+  if (!text) return;
+  submitAgentInstructionWithText(text);
+}
 
-    // Stream Pane
-    paneStream: document.getElementById('pane-stream'),
-    streamSessionTitle: document.getElementById('stream-session-title'),
-    runStatusChip: document.getElementById('run-status-chip'),
-    runStatusLabel: document.getElementById('run-status-label'),
-    stepCounterChip: document.getElementById('step-counter-chip'),
-    timelineViewport: document.getElementById('timeline-viewport'),
-    btnJumpLatest: document.getElementById('btn-jump-latest'),
-    idleTerminalCard: document.getElementById('idle-terminal-card'),
-    executionStreamList: document.getElementById('execution-stream-list'),
+function submitAgentInstructionWithText(text) {
+  appendTrace('user', text);
+  startAgentStream(text);
+}
 
-    // Composer
-    composerForm: document.getElementById('composer-form'),
-    composerInput: document.getElementById('composer-input'),
-    composerModelIndicator: document.getElementById('composer-model-indicator'),
-    composerStepsIndicator: document.getElementById('composer-steps-indicator'),
-    btnSubmitTask: document.getElementById('btn-submit-task'),
-
-    // Inspector Pane
-    paneInspector: document.getElementById('pane-inspector'),
-    btnCloseInspector: document.getElementById('btn-close-inspector'),
-    tabBtnArtifacts: document.getElementById('tab-btn-artifacts'),
-    tabBtnTool: document.getElementById('tab-btn-tool'),
-    tabBtnTelemetry: document.getElementById('tab-btn-telemetry'),
-    artifactsCountPill: document.getElementById('artifacts-count-pill'),
-    viewArtifacts: document.getElementById('view-artifacts'),
-    viewToolCall: document.getElementById('view-tool-call'),
-    viewTelemetry: document.getElementById('view-telemetry'),
-    emptyArtifacts: document.getElementById('empty-artifacts'),
-    artifactsContentContainer: document.getElementById('artifacts-content-container'),
-    emptyToolInspector: document.getElementById('empty-tool-inspector'),
-    toolInspectionDetails: document.getElementById('tool-inspection-details'),
-    inspectToolName: document.getElementById('inspect-tool-name'),
-    inspectToolStatus: document.getElementById('inspect-tool-status'),
-    inspectToolStep: document.getElementById('inspect-tool-step'),
-    inspectToolArgs: document.getElementById('inspect-tool-args'),
-    inspectToolOutput: document.getElementById('inspect-tool-output'),
-    btnCopyArgs: document.getElementById('btn-copy-args'),
-    btnCopyOutput: document.getElementById('btn-copy-output'),
-    telemetryLogScroll: document.getElementById('telemetry-log-scroll'),
-    telemetryEmpty: document.getElementById('telemetry-empty'),
-
-    // Settings Modal
-    modalSettings: document.getElementById('modal-settings'),
-    btnCloseSettings: document.getElementById('btn-close-settings'),
-    btnCancelSettings: document.getElementById('btn-cancel-settings'),
-    btnSaveSettings: document.getElementById('btn-save-settings'),
-    cfgProviderUrl: document.getElementById('cfg-provider-url'),
-    cfgApiKey: document.getElementById('cfg-api-key'),
-    cfgMaxSteps: document.getElementById('cfg-max-steps'),
-    settingsModelsTagList: document.getElementById('settings-models-tag-list'),
-    inputAddModel: document.getElementById('input-add-model'),
-    btnAddModel: document.getElementById('btn-add-model'),
-    btnPingGateway: document.getElementById('btn-ping-gateway'),
-    diagnosticLog: document.getElementById('diagnostic-log'),
-
-    // Toast
-    toastStack: document.getElementById('toast-stack')
-  };
-
-  // ---------------------------------------------------------------------------
-  // Utilities & Safe Markdown
-  // ---------------------------------------------------------------------------
-  function escapeHtml(str) {
-    if (typeof str !== 'string') {
-      try {
-        str = JSON.stringify(str, null, 2);
-      } catch (e) {
-        str = String(str);
-      }
-    }
-    return str
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#039;');
-  }
-
-  function safeMarkdown(md) {
-    if (!md || typeof md !== 'string') return '';
-    let html = escapeHtml(md);
-
-    // Code blocks with ```
-    html = html.replace(/```([a-zA-Z0-9_-]*)\n([\s\S]*?)```/g, (match, lang, code) => {
-      return `<pre><code class="lang-${lang}">${code.trim()}</code></pre>`;
+async function startAgentStream(instruction) {
+  try {
+    const resp = await fetch('/api/agent/stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        instruction: instruction,
+        multi_agent: true,
+      })
     });
-
-    // Inline code `code`
-    html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
-
-    // Headers
-    html = html.replace(/^### (.*$)/gim, '<h3>$1</h3>');
-    html = html.replace(/^## (.*$)/gim, '<h2>$1</h2>');
-    html = html.replace(/^# (.*$)/gim, '<h1>$1</h1>');
-
-    // Bold **text**
-    html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-
-    // Italic *text*
-    html = html.replace(/\*([^*]+)\*/g, '<em>$1</em>');
-
-    // Horizontal rule
-    html = html.replace(/^---$/gim, '<hr>');
-
-    // Blockquotes
-    html = html.replace(/^> (.*$)/gim, '<blockquote>$1</blockquote>');
-
-    // Unordered lists
-    html = html.replace(/^\* (.*$)/gim, '<li>$1</li>');
-    html = html.replace(/^- (.*$)/gim, '<li>$1</li>');
-
-    // Ordered lists
-    html = html.replace(/^\d+\. (.*$)/gim, '<li>$1</li>');
-
-    // Wrap consecutive <li> in <ul>
-    html = html.replace(/(<li>[\s\S]*?<\/li>)/g, '<ul>$1</ul>');
-    html = html.replace(/<\/ul>\s*<ul>/g, '');
-
-    // Markdown tables
-    html = renderMarkdownTables(html);
-
-    // Paragraph line breaks
-    const lines = html.split('\n\n');
-    html = lines.map(block => {
-      const trimmed = block.trim();
-      if (!trimmed) return '';
-      if (trimmed.startsWith('<h') || trimmed.startsWith('<pre') ||
-          trimmed.startsWith('<ul') || trimmed.startsWith('<table') ||
-          trimmed.startsWith('<hr') || trimmed.startsWith('<blockquote')) {
-        return trimmed;
-      }
-      return `<p>${trimmed.replace(/\n/g, '<br>')}</p>`;
-    }).join('');
-
-    return html;
+    handleSSEStream(resp);
+  } catch (err) {
+    appendTrace('error', `Agent connection error: ${err}`);
   }
-
-  function renderMarkdownTables(text) {
-    const tableRegex = /((?:\|[^\n]+\|\r?\n)+)/g;
-    return text.replace(tableRegex, (match) => {
-      const lines = match.trim().split('\n').map(l => l.trim()).filter(Boolean);
-      if (lines.length < 2) return match;
-      if (!lines[1].includes('-')) return match;
-
-      const headerCols = lines[0].split('|').slice(1, -1).map(c => c.trim());
-      const rows = lines.slice(2).map(line => {
-        return line.split('|').slice(1, -1).map(c => c.trim());
-      });
-
-      let tableHtml = '<table><thead><tr>';
-      headerCols.forEach(col => { tableHtml += `<th>${col}</th>`; });
-      tableHtml += '</tr></thead><tbody>';
-
-      rows.forEach(row => {
-        tableHtml += '<tr>';
-        row.forEach(cell => { tableHtml += `<td>${cell}</td>`; });
-        tableHtml += '</tr>';
-      });
-
-      tableHtml += '</tbody></table>';
-      return tableHtml;
-    });
-  }
-
-  function showToast(message, type = 'info') {
-    const toast = document.createElement('div');
-    toast.className = `toast ${type}`;
-    toast.textContent = message;
-    el.toastStack.appendChild(toast);
-    setTimeout(() => {
-      toast.style.opacity = '0';
-      setTimeout(() => toast.remove(), 150);
-    }, 2800);
-  }
-
-  function formatTimestamp(ts) {
-    if (!ts) return '';
-    const d = new Date(ts * 1000);
-    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-  }
-
-  // ---------------------------------------------------------------------------
-  // Viewport Scroll Tracker
-  // ---------------------------------------------------------------------------
-  function checkScrollPosition() {
-    const vp = el.timelineViewport;
-    const scrollBottom = vp.scrollHeight - vp.scrollTop - vp.clientHeight;
-    state.userScrolledUp = scrollBottom > 60;
-    if (state.userScrolledUp) {
-      el.btnJumpLatest.classList.remove('hidden');
-    } else {
-      el.btnJumpLatest.classList.add('hidden');
-    }
-  }
-
-  function scrollToBottom(force = false) {
-    if (force || !state.userScrolledUp) {
-      el.timelineViewport.scrollTop = el.timelineViewport.scrollHeight;
-    }
-  }
-
-  el.timelineViewport.addEventListener('scroll', checkScrollPosition);
-  el.btnJumpLatest.addEventListener('click', () => {
-    state.userScrolledUp = false;
-    scrollToBottom(true);
-    el.btnJumpLatest.classList.add('hidden');
-  });
-
-  // ---------------------------------------------------------------------------
-  // Execution State & Run Status Chip
-  // ---------------------------------------------------------------------------
-  function setRunState(status, message) {
-    state.runStatus = status;
-    el.runStatusChip.className = `run-status-chip ${status}`;
-
-    const labels = {
-      idle: 'Ready',
-      running: message || 'Executing...',
-      converged: 'Converged',
-      'step-limit': 'Step Limit',
-      interrupted: message || 'Interrupted'
-    };
-
-    el.runStatusLabel.innerText = labels[status] || status;
-
-    if (status === 'running') {
-      el.btnSubmitTask.disabled = true;
-      el.composerInput.disabled = true;
-    } else {
-      el.btnSubmitTask.disabled = false;
-      el.composerInput.disabled = false;
-    }
-  }
-
-  function updateStepCounter(step) {
-    state.stepCount = step;
-    el.stepCounterChip.innerText = `Step: ${step}`;
-  }
-
-  // ---------------------------------------------------------------------------
-  // Backend Configuration & Engine Diagnostics
-  // ---------------------------------------------------------------------------
-  async function loadConfig() {
-    try {
-      const res = await fetch('/api/config');
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      state.config = {
-        provider_url: data.provider_url || 'http://localhost:20128/v1',
-        api_key: data.api_key || '',
-        active_model: data.active_model || 'antigravity/gemini-3.8-flash-tiered',
-        custom_models: data.custom_models || ['antigravity/gemini-3.8-flash-tiered'],
-        max_steps: data.max_steps || 8
-      };
-      updateUIWithConfig();
-      await checkGatewayHealth();
-    } catch (err) {
-      console.warn('Could not load config from backend:', err);
-      el.engineStatusDot.className = 'engine-dot offline';
-      el.engineStatusLabel.innerText = 'Offline';
-    }
-  }
-
-  function updateUIWithConfig() {
-    el.composerModelIndicator.innerText = state.config.active_model || 'No model';
-    el.composerStepsIndicator.innerText = state.config.max_steps || 8;
-
-    // Populate model select in titlebar
-    el.globalModelSelect.innerHTML = '';
-    const models = state.config.custom_models || [];
-    if (!models.includes(state.config.active_model) && state.config.active_model) {
-      models.unshift(state.config.active_model);
-    }
-    models.forEach(m => {
-      const opt = document.createElement('option');
-      opt.value = m;
-      opt.textContent = m;
-      if (m === state.config.active_model) opt.selected = true;
-      el.globalModelSelect.appendChild(opt);
-    });
-
-    // Populate settings modal
-    el.cfgProviderUrl.value = state.config.provider_url;
-    el.cfgApiKey.value = state.config.api_key;
-    el.cfgMaxSteps.value = state.config.max_steps;
-    renderSettingsModelsList();
-  }
-
-  function renderSettingsModelsList() {
-    el.settingsModelsTagList.innerHTML = '';
-    state.config.custom_models.forEach((m, idx) => {
-      const row = document.createElement('div');
-      row.className = 'model-tag-row';
-      row.innerHTML = `
-        <span>${escapeHtml(m)}</span>
-        <button type="button" class="btn-del-tag" data-index="${idx}" title="Remove model">✕</button>
-      `;
-      row.querySelector('.btn-del-tag').addEventListener('click', () => {
-        state.config.custom_models.splice(idx, 1);
-        renderSettingsModelsList();
-      });
-      el.settingsModelsTagList.appendChild(row);
-    });
-  }
-
-  async function checkGatewayHealth() {
-    el.engineStatusDot.className = 'engine-dot checking';
-    el.engineStatusLabel.innerText = 'Checking';
-    try {
-      const res = await fetch('/api/test-connection', { method: 'POST' });
-      const data = await res.json();
-      if (data.ok) {
-        el.engineStatusDot.className = 'engine-dot online';
-        el.engineStatusLabel.innerText = 'Online';
-      } else {
-        el.engineStatusDot.className = 'engine-dot offline';
-        el.engineStatusLabel.innerText = 'Offline';
-      }
-      return data;
-    } catch (err) {
-      el.engineStatusDot.className = 'engine-dot offline';
-      el.engineStatusLabel.innerText = 'Offline';
-      return { ok: false, message: err.message };
-    }
-  }
-
-  // ---------------------------------------------------------------------------
-  // Titlebar Tabs & Session Management
-  // ---------------------------------------------------------------------------
-  async function loadSessions() {
-    try {
-      const res = await fetch('/api/sessions');
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      state.sessions = await res.json();
-      renderSidebarSessions();
-
-      // Open initial tabs
-      if (state.sessions.length > 0) {
-        state.openTabIds = state.sessions.slice(0, 4).map(s => s.id);
-        if (state.activeSessionId && state.sessions.find(s => s.id === state.activeSessionId)) {
-          if (!state.openTabIds.includes(state.activeSessionId)) {
-            state.openTabIds.unshift(state.activeSessionId);
-          }
-          await loadSession(state.activeSessionId);
-        } else {
-          await loadSession(state.sessions[0].id);
-        }
-      } else {
-        startNewSession();
-      }
-      renderTitlebarTabs();
-    } catch (err) {
-      console.error('Failed to load sessions:', err);
-    }
-  }
-
-  function renderTitlebarTabs() {
-    el.titlebarTabsStrip.innerHTML = '';
-    state.openTabIds.forEach(sessId => {
-      const sess = state.sessions.find(s => s.id === sessId);
-      const tab = document.createElement('div');
-      tab.className = `titlebar-tab ${sessId === state.activeSessionId ? 'active' : ''}`;
-      tab.dataset.sessionId = sessId;
-      tab.innerHTML = `
-        <span class="tab-title">${escapeHtml(sess ? sess.title : 'Run')}</span>
-        <button class="tab-close" title="Close Tab">✕</button>
-      `;
-
-      tab.addEventListener('click', (e) => {
-        if (e.target.closest('.tab-close')) return;
-        if (sessId !== state.activeSessionId) {
-          loadSession(sessId);
-        }
-      });
-
-      tab.querySelector('.tab-close').addEventListener('click', (e) => {
-        e.stopPropagation();
-        closeTitlebarTab(sessId);
-      });
-
-      el.titlebarTabsStrip.appendChild(tab);
-    });
-  }
-
-  function closeTitlebarTab(sessId) {
-    state.openTabIds = state.openTabIds.filter(id => id !== sessId);
-    if (state.activeSessionId === sessId) {
-      if (state.openTabIds.length > 0) {
-        loadSession(state.openTabIds[0]);
-      } else {
-        startNewSession();
-      }
-    } else {
-      renderTitlebarTabs();
-    }
-  }
-
-  function renderSidebarSessions() {
-    el.sessionCountBadge.innerText = state.sessions.length;
-    el.sidebarSessionList.innerHTML = '';
-
-    if (state.sessions.length === 0) {
-      el.sidebarSessionList.innerHTML = `
-        <div style="padding: 10px; font-size: 11px; color: var(--text-muted); text-align: center;">
-          No past runs recorded.
-        </div>
-      `;
-      return;
-    }
-
-    state.sessions.forEach(s => {
-      const row = document.createElement('div');
-      row.className = `session-row ${s.id === state.activeSessionId ? 'active' : ''}`;
-      row.innerHTML = `
-        <span class="session-row-title">${escapeHtml(s.title || 'Untitled Run')}</span>
-        <button class="btn-del-run" title="Delete run">✕</button>
-      `;
-
-      row.addEventListener('click', (e) => {
-        if (e.target.closest('.btn-del-run')) return;
-        if (!state.openTabIds.includes(s.id)) {
-          state.openTabIds.push(s.id);
-        }
-        loadSession(s.id);
-      });
-
-      row.querySelector('.btn-del-run').addEventListener('click', async (e) => {
-        e.stopPropagation();
-        await deleteSession(s.id);
-      });
-
-      el.sidebarSessionList.appendChild(row);
-    });
-  }
-
-  async function loadSession(sessionId) {
-    if (state.isStreaming) {
-      showToast('Agent is currently running', 'error');
-      return;
-    }
-
-    try {
-      const res = await fetch(`/api/sessions/${sessionId}`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const session = await res.json();
-
-      state.activeSessionId = session.id;
-      state.activeSessionTitle = session.title || 'Untitled Run';
-      localStorage.setItem('limen_session_id', session.id);
-
-      el.streamSessionTitle.innerText = state.activeSessionTitle;
-      renderSidebarSessions();
-      renderTitlebarTabs();
-
-      // Clear stream and artifacts
-      el.executionStreamList.innerHTML = '';
-      state.artifacts = [];
-      updateArtifactsInspector();
-      updateStepCounter(0);
-
-      const turns = session.turns || [];
-      if (turns.length === 0) {
-        el.idleTerminalCard.classList.remove('hidden');
-        setRunState('idle');
-      } else {
-        el.idleTerminalCard.classList.add('hidden');
-        turns.forEach(turn => {
-          if (turn.role === 'user') {
-            renderUserTurnDOM(turn.content, turn.timestamp);
-          } else if (turn.role === 'assistant') {
-            renderHistoricalAssistantTurnDOM(turn);
-          }
-        });
-        setRunState('idle');
-      }
-
-      scrollToBottom(true);
-    } catch (err) {
-      console.error('Error loading session:', err);
-      showToast(`Could not load run: ${err.message}`, 'error');
-    }
-  }
-
-  function startNewSession() {
-    if (state.isStreaming) {
-      showToast('Wait for run to complete', 'error');
-      return;
-    }
-
-    state.activeSessionId = '';
-    state.activeSessionTitle = 'New Run';
-    localStorage.removeItem('limen_session_id');
-
-    el.streamSessionTitle.innerText = 'New Run';
-    el.executionStreamList.innerHTML = '';
-    el.idleTerminalCard.classList.remove('hidden');
-    state.artifacts = [];
-    updateArtifactsInspector();
-    updateStepCounter(0);
-
-    renderSidebarSessions();
-    renderTitlebarTabs();
-    setRunState('idle');
-    el.composerInput.focus();
-  }
-
-  async function deleteSession(sessionId) {
-    try {
-      const res = await fetch(`/api/sessions/${sessionId}`, { method: 'DELETE' });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-
-      state.sessions = state.sessions.filter(s => s.id !== sessionId);
-      state.openTabIds = state.openTabIds.filter(id => id !== sessionId);
-
-      if (state.activeSessionId === sessionId) {
-        if (state.openTabIds.length > 0) {
-          await loadSession(state.openTabIds[0]);
-        } else if (state.sessions.length > 0) {
-          await loadSession(state.sessions[0].id);
-        } else {
-          startNewSession();
-        }
-      } else {
-        renderSidebarSessions();
-        renderTitlebarTabs();
-      }
-      showToast('Run deleted', 'info');
-    } catch (err) {
-      showToast(`Delete failed: ${err.message}`, 'error');
-    }
-  }
-
-  // ---------------------------------------------------------------------------
-  // DOM Rendering: User & Assistant Conversation Turns
-  // ---------------------------------------------------------------------------
-  function renderUserTurnDOM(content, timestamp) {
-    const userBlock = document.createElement('div');
-    userBlock.className = 'bubble-user';
-    userBlock.innerHTML = `
-      <div class="bubble-user-meta">
-        <span>TASK INSTRUCTION</span>
-        <span>${formatTimestamp(timestamp || Date.now() / 1000)}</span>
-      </div>
-      <div>${escapeHtml(content)}</div>
-    `;
-    el.executionStreamList.appendChild(userBlock);
-    scrollToBottom();
-  }
-
-  function createStreamingTurnDOM() {
-    const block = document.createElement('div');
-    block.className = 'turn-block streaming';
-
-    const header = document.createElement('div');
-    header.className = 'turn-block-header';
-    header.innerHTML = `
-      <div class="header-identity">
-        <span class="header-spinner"></span>
-        <span class="header-status-label" id="stream-status-label">Deciding action...</span>
-      </div>
-      <span class="monospace" style="font-size: 10.5px; color: var(--text-muted);">${formatTimestamp(Date.now() / 1000)}</span>
-    `;
-
-    // Reasoning Drawer
-    const reasoningDrawer = document.createElement('details');
-    reasoningDrawer.className = 'reasoning-drawer hidden';
-    reasoningDrawer.open = true;
-    reasoningDrawer.innerHTML = `
-      <summary class="reasoning-summary">
-        <span class="reasoning-dot"></span>
-        <span>Reasoning &amp; Strategy</span>
-      </summary>
-      <div class="reasoning-text"></div>
-    `;
-
-    // Tool stack
-    const toolStack = document.createElement('div');
-    toolStack.className = 'tool-disclosure-stack hidden';
-
-    // Prose output
-    const proseOutput = document.createElement('div');
-    proseOutput.className = 'turn-prose hidden';
-
-    // Terminal State Banner
-    const terminalBanner = document.createElement('div');
-    terminalBanner.className = 'terminal-state-banner hidden';
-
-    block.appendChild(header);
-    block.appendChild(reasoningDrawer);
-    block.appendChild(toolStack);
-    block.appendChild(proseOutput);
-    block.appendChild(terminalBanner);
-
-    el.executionStreamList.appendChild(block);
-    scrollToBottom();
-
-    return {
-      root: block,
-      statusLabel: header.querySelector('#stream-status-label'),
-      reasoningDrawer: reasoningDrawer,
-      reasoningText: reasoningDrawer.querySelector('.reasoning-text'),
-      toolStack: toolStack,
-      proseOutput: proseOutput,
-      terminalBanner: terminalBanner,
-      toolInvocations: new Map()
-    };
-  }
-
-  function renderHistoricalAssistantTurnDOM(turnData) {
-    const block = document.createElement('div');
-    block.className = 'turn-block';
-
-    const header = document.createElement('div');
-    header.className = 'turn-block-header';
-    header.innerHTML = `
-      <div class="header-identity">
-        <span>Limen Agent</span>
-      </div>
-      <span class="monospace" style="font-size: 10.5px; color: var(--text-muted);">${formatTimestamp(turnData.timestamp)}</span>
-    `;
-    block.appendChild(header);
-
-    // Reasoning
-    if (turnData.thoughts && turnData.thoughts.trim()) {
-      const drawer = document.createElement('details');
-      drawer.className = 'reasoning-drawer';
-      drawer.innerHTML = `
-        <summary class="reasoning-summary">
-          <span class="reasoning-dot"></span>
-          <span>Reasoning Process</span>
-        </summary>
-        <div class="reasoning-text">${escapeHtml(turnData.thoughts)}</div>
-      `;
-      block.appendChild(drawer);
-    }
-
-    // Tools
-    if (turnData.tools && turnData.tools.length > 0) {
-      const toolStack = document.createElement('div');
-      toolStack.className = 'tool-disclosure-stack';
-      turnData.tools.forEach((t, idx) => {
-        const card = createToolRowElement(t.step || (idx + 1), t.tool_name || 'tool', t.status || 'success', t.args || {}, t.result_summary || '');
-        toolStack.appendChild(card);
-      });
-      block.appendChild(toolStack);
-    }
-
-    // Plan artifact table
-    if (turnData.plan_artifact && turnData.plan_artifact.columns && turnData.plan_artifact.rows) {
-      addArtifactToInspector(turnData.plan_artifact.columns, turnData.plan_artifact.rows);
-    }
-
-    // Final prose
-    if (turnData.content && turnData.content.trim()) {
-      const prose = document.createElement('div');
-      prose.className = 'turn-prose';
-      prose.innerHTML = safeMarkdown(turnData.content);
-      block.appendChild(prose);
-    }
-
-    el.executionStreamList.appendChild(block);
-  }
-
-  // ---------------------------------------------------------------------------
-  // 4-Tier Progressive Tool Row Component (Section 14 Specification)
-  // ---------------------------------------------------------------------------
-  function createToolRowElement(step, toolName, status, args, summary) {
-    const card = document.createElement('div');
-    card.className = `tool-row-card ${status}`;
-
-    const argsCompact = typeof args === 'object' ? JSON.stringify(args).slice(0, 65) : String(args);
-    const argsJson = typeof args === 'string' ? args : JSON.stringify(args, null, 2);
-
-    let statusBadge = '';
-    if (status === 'running') {
-      statusBadge = '<span class="status-badge-mini running">running...</span>';
-    } else if (status === 'success') {
-      statusBadge = '<span class="status-badge-mini success">✓ done</span>';
-    } else {
-      statusBadge = '<span class="status-badge-mini error">✕ error</span>';
-    }
-
-    card.innerHTML = `
-      <!-- Tier 1: 24px Summary Row with Hover Icon-to-Chevron Morph (Section 14.2) -->
-      <div class="tier1-summary-row" title="Click to expand details">
-        <div class="row-left">
-          <span class="morph-box">
-            <svg class="morph-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polyline></svg>
-            <span class="morph-chevron">›</span>
-          </span>
-          <span class="tool-name-mono">${escapeHtml(toolName)}</span>
-          <span class="tool-arg-preview">${escapeHtml(argsCompact)}</span>
-        </div>
-        <div class="row-right">
-          ${statusBadge}
-          <button type="button" class="btn-open-inspector-link" title="Open in Inspector Pane">Inspect ↗</button>
-        </div>
-      </div>
-
-      <!-- Tier 2: Inline visible result summary bar (visible without click) -->
-      ${summary ? `<div class="tier2-result-bar"><span class="result-lead">↳</span>${escapeHtml(summary)}</div>` : ''}
-
-      <!-- Tier 4: Crimson error bar if error occurred -->
-      ${status === 'error' ? `<div class="tier4-error-alert"><strong>Failure:</strong> ${escapeHtml(summary || 'Execution error')}</div>` : ''}
-
-      <!-- Tier 3: Expandable quick preview -->
-      <div class="tier3-inline-details">
-        <pre class="details-pre"><code>${escapeHtml(argsJson)}</code></pre>
-      </div>
-    `;
-
-    // Click on row expands inline details
-    card.querySelector('.tier1-summary-row').addEventListener('click', (e) => {
-      if (e.target.closest('.btn-open-inspector-link')) return;
-      card.classList.toggle('expanded');
-    });
-
-    // Inspect button opens right-hand inspector pane
-    card.querySelector('.btn-open-inspector-link').addEventListener('click', (e) => {
-      e.stopPropagation();
-      openToolInInspector(step, toolName, status, args, summary);
-    });
-
-    return card;
-  }
-
-  function updateToolRowElement(card, step, toolName, status, args, summary) {
-    card.className = `tool-row-card ${status}`;
-
-    const argsCompact = typeof args === 'object' ? JSON.stringify(args).slice(0, 65) : String(args);
-    const argsJson = typeof args === 'string' ? args : JSON.stringify(args, null, 2);
-
-    let statusBadge = '';
-    if (status === 'running') {
-      statusBadge = '<span class="status-badge-mini running">running...</span>';
-    } else if (status === 'success') {
-      statusBadge = '<span class="status-badge-mini success">✓ done</span>';
-    } else {
-      statusBadge = '<span class="status-badge-mini error">✕ error</span>';
-    }
-
-    card.innerHTML = `
-      <div class="tier1-summary-row" title="Click to expand details">
-        <div class="row-left">
-          <span class="morph-box">
-            <svg class="morph-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polyline></svg>
-            <span class="morph-chevron">›</span>
-          </span>
-          <span class="tool-name-mono">${escapeHtml(toolName)}</span>
-          <span class="tool-arg-preview">${escapeHtml(argsCompact)}</span>
-        </div>
-        <div class="row-right">
-          ${statusBadge}
-          <button type="button" class="btn-open-inspector-link" title="Open in Inspector Pane">Inspect ↗</button>
-        </div>
-      </div>
-
-      ${summary ? `<div class="tier2-result-bar"><span class="result-lead">↳</span>${escapeHtml(summary)}</div>` : ''}
-
-      ${status === 'error' ? `<div class="tier4-error-alert"><strong>Failure:</strong> ${escapeHtml(summary || 'Execution error')}</div>` : ''}
-
-      <div class="tier3-inline-details">
-        <pre class="details-pre"><code>${escapeHtml(argsJson)}</code></pre>
-      </div>
-    `;
-
-    card.querySelector('.tier1-summary-row').addEventListener('click', (e) => {
-      if (e.target.closest('.btn-open-inspector-link')) return;
-      card.classList.toggle('expanded');
-    });
-
-    card.querySelector('.btn-open-inspector-link').addEventListener('click', (e) => {
-      e.stopPropagation();
-      openToolInInspector(step, toolName, status, args, summary);
-    });
-  }
-
-  // ---------------------------------------------------------------------------
-  // Right Inspector Pane Management (Section 16 Specification)
-  // ---------------------------------------------------------------------------
-  function openToolInInspector(step, toolName, status, args, summary) {
-    el.paneInspector.classList.remove('hidden-pane');
-    el.btnToggleInspector.classList.add('active');
-
-    // Switch to tool inspector tab
-    switchInspectorTab('tool_call');
-
-    el.emptyToolInspector.classList.add('hidden');
-    el.toolInspectionDetails.classList.remove('hidden');
-
-    el.inspectToolName.innerText = toolName;
-    el.inspectToolStatus.innerText = status;
-    el.inspectToolStatus.className = `meta-val status-badge-mini ${status}`;
-    el.inspectToolStep.innerText = `Step ${step}`;
-
-    const argsText = typeof args === 'string' ? args : JSON.stringify(args, null, 2);
-    el.inspectToolArgs.innerText = argsText;
-    el.inspectToolOutput.innerText = summary || 'No output recorded';
-
-    state.selectedToolForInspect = { step, toolName, status, args: argsText, output: summary };
-  }
-
-  function addArtifactToInspector(columns, rows) {
-    state.artifacts.push({ columns, rows, timestamp: Date.now() / 1000 });
-    updateArtifactsInspector();
-    // Auto switch to artifacts tab if pane is visible
-    switchInspectorTab('artifacts');
-  }
-
-  function updateArtifactsInspector() {
-    el.artifactsCountPill.innerText = state.artifacts.length;
-    if (state.artifacts.length === 0) {
-      el.emptyArtifacts.classList.remove('hidden');
-      el.artifactsContentContainer.classList.add('hidden');
-      el.artifactsContentContainer.innerHTML = '';
-      return;
-    }
-
-    el.emptyArtifacts.classList.add('hidden');
-    el.artifactsContentContainer.classList.remove('hidden');
-    el.artifactsContentContainer.innerHTML = '';
-
-    state.artifacts.forEach((art, idx) => {
-      const block = document.createElement('div');
-      block.className = 'artifact-block';
-
-      let tableHtml = `
-        <div class="artifact-block-header">
-          <span class="artifact-block-title">Artifact #${idx + 1} (${art.rows.length} rows)</span>
-          <span class="monospace" style="color: var(--text-muted); font-size: 10px;">${art.columns.length} columns</span>
-        </div>
-        <div class="artifact-table-scroll">
-          <table class="artifact-table">
-            <thead><tr>
-      `;
-
-      art.columns.forEach(c => { tableHtml += `<th>${escapeHtml(c)}</th>`; });
-      tableHtml += '</tr></thead><tbody>';
-
-      art.rows.forEach(r => {
-        tableHtml += '<tr>';
-        art.columns.forEach(c => {
-          const val = r[c] !== undefined ? r[c] : '';
-          tableHtml += `<td>${escapeHtml(typeof val === 'object' ? JSON.stringify(val) : String(val))}</td>`;
-        });
-        tableHtml += '</tr>';
-      });
-
-      tableHtml += '</tbody></table></div>';
-      block.innerHTML = tableHtml;
-      el.artifactsContentContainer.appendChild(block);
-    });
-  }
-
-  function logTelemetryEvent(ev) {
-    el.telemetryEmpty.classList.add('hidden');
-    const entry = document.createElement('div');
-    entry.className = `telemetry-entry ${ev.type}`;
-    entry.innerText = `[${formatTimestamp(Date.now() / 1000)}] [${ev.type}] ${JSON.stringify(ev)}`;
-    el.telemetryLogScroll.appendChild(entry);
-    el.telemetryLogScroll.scrollTop = el.telemetryLogScroll.scrollHeight;
-  }
-
-  function switchInspectorTab(tabName) {
-    [el.tabBtnArtifacts, el.tabBtnTool, el.tabBtnTelemetry].forEach(btn => btn.classList.remove('active'));
-    [el.viewArtifacts, el.viewToolCall, el.viewTelemetry].forEach(view => view.classList.remove('active'));
-
-    if (tabName === 'artifacts') {
-      el.tabBtnArtifacts.classList.add('active');
-      el.viewArtifacts.classList.add('active');
-    } else if (tabName === 'tool_call') {
-      el.tabBtnTool.classList.add('active');
-      el.viewToolCall.classList.add('active');
-    } else if (tabName === 'telemetry') {
-      el.tabBtnTelemetry.classList.add('active');
-      el.viewTelemetry.classList.add('active');
-    }
-  }
-
-  el.tabBtnArtifacts.addEventListener('click', () => switchInspectorTab('artifacts'));
-  el.tabBtnTool.addEventListener('click', () => switchInspectorTab('tool_call'));
-  el.tabBtnTelemetry.addEventListener('click', () => switchInspectorTab('telemetry'));
-
-  el.btnToggleInspector.addEventListener('click', () => {
-    el.paneInspector.classList.toggle('hidden-pane');
-    el.btnToggleInspector.classList.toggle('active', !el.paneInspector.classList.contains('hidden-pane'));
-  });
-
-  el.btnCloseInspector.addEventListener('click', () => {
-    el.paneInspector.classList.add('hidden-pane');
-    el.btnToggleInspector.classList.remove('active');
-  });
-
-  el.btnCopyArgs.addEventListener('click', () => {
-    if (state.selectedToolForInspect) {
-      navigator.clipboard.writeText(state.selectedToolForInspect.args);
-      showToast('Arguments copied to clipboard', 'info');
-    }
-  });
-
-  el.btnCopyOutput.addEventListener('click', () => {
-    if (state.selectedToolForInspect) {
-      navigator.clipboard.writeText(state.selectedToolForInspect.output);
-      showToast('Output copied to clipboard', 'info');
-    }
-  });
-
-  // ---------------------------------------------------------------------------
-  // SSE Streaming Execution Loop
-  // ---------------------------------------------------------------------------
-  async function executeAgentTask(instruction) {
-    if (!instruction || !instruction.trim() || state.isStreaming) return;
-
-    el.idleTerminalCard.classList.add('hidden');
-    state.userScrolledUp = false;
-
-    renderUserTurnDOM(instruction, Date.now() / 1000);
-    el.composerInput.value = '';
-    autoResizeTextarea(el.composerInput);
-
-    const stream = createStreamingTurnDOM();
-    state.isStreaming = true;
-    setRunState('running', 'Starting loop...');
-
-    const modelToUse = el.globalModelSelect.value || state.config.active_model;
-    state.abortController = new AbortController();
-    let streamCompletedNormally = false;
-
-    const multiAgentEnabled = Boolean(document.getElementById('composer-multi-agent')?.checked);
-    try {
-      const response = await fetch('/api/agent/stream', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          instruction: instruction.trim(),
-          session_id: state.activeSessionId || null,
-          model: modelToUse,
-          multi_agent: multiAgentEnabled
-        }),
-        signal: state.abortController.signal
-      });
-
-      if (!response.ok) {
-        const errText = await response.text();
-        throw new Error(`HTTP ${response.status}: ${errText}`);
-      }
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const chunks = buffer.split('\n\n');
-        buffer = chunks.pop();
-
-        for (const block of chunks) {
-          const trimmed = block.trim();
-          if (!trimmed.startsWith('data:')) continue;
-          const jsonStr = trimmed.replace(/^data:\s*/, '');
-          try {
-            const event = JSON.parse(jsonStr);
-            logTelemetryEvent(event);
-            handleAgentEvent(event, stream);
-            if (event.type === 'done') streamCompletedNormally = true;
-          } catch (parseErr) {
-            console.warn('Failed to parse SSE JSON chunk:', jsonStr);
-          }
-        }
-      }
-
-      if (buffer.trim().startsWith('data:')) {
+}
+
+async function handleSSEStream(response) {
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder('utf-8');
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop();
+
+    for (const line of lines) {
+      if (line.startsWith('data: ')) {
+        const rawJson = line.slice(6).trim();
+        if (!rawJson) continue;
         try {
-          const event = JSON.parse(buffer.trim().replace(/^data:\s*/, ''));
-          logTelemetryEvent(event);
-          handleAgentEvent(event, stream);
-          if (event.type === 'done') streamCompletedNormally = true;
-        } catch (e) {}
-      }
-
-      if (!streamCompletedNormally) {
-        handleStreamDisconnect(stream, 'Stream disconnected prematurely before done confirmation.');
-      }
-    } catch (fetchErr) {
-      console.error('Fetch stream error:', fetchErr);
-      handleStreamDisconnect(stream, fetchErr.name === 'AbortError' ? 'Execution aborted.' : `Transport Error: ${fetchErr.message}`);
-    } finally {
-      state.isStreaming = false;
-      state.abortController = null;
-      stream.root.classList.remove('streaming');
-      loadSessionsSidebarOnly();
-    }
-  }
-
-  function handleAgentEvent(ev, stream) {
-    if (ev.step) updateStepCounter(ev.step);
-
-    switch (ev.type) {
-      case 'activity': {
-        stream.statusLabel.textContent = ev.content || ev.message || 'Checking observations';
-        break;
-      }
-      case 'agent_handoff': {
-        const handoffEl = document.createElement('div');
-        handoffEl.className = 'agent-handoff-banner';
-        handoffEl.innerHTML = `
-          <div class="handoff-header">
-            <span class="handoff-tag">SWARM DISPATCH</span>
-            <span class="handoff-transition"><strong>${escapeHtml(ev.from_agent || 'Client')}</strong> → <strong>${escapeHtml(ev.to_agent || 'Specialist')}</strong></span>
-          </div>
-          ${ev.role ? `<div class="handoff-role">${escapeHtml(ev.role)}</div>` : ''}
-          ${ev.mission ? `<div class="handoff-mission">Target: ${escapeHtml(ev.mission)}</div>` : ''}
-        `;
-        stream.root.appendChild(handoffEl);
-        stream.statusLabel.textContent = `${ev.to_agent}: ${ev.role || 'Active'}`;
-        scrollToBottom();
-        break;
-      }
-      case 'critic_evaluation': {
-        const auditEl = document.createElement('div');
-        const approved = ev.approved;
-        auditEl.className = `critic-eval-banner ${approved ? 'approved' : 'violation'}`;
-        let violationsHtml = '';
-        if (ev.violations && ev.violations.length) {
-          violationsHtml = `<ul class="critic-violation-list">${ev.violations.map(v => `<li><strong>${escapeHtml(v.type)}:</strong> ${escapeHtml(v.details || v.target)}</li>`).join('')}</ul>`;
+          const event = JSON.parse(rawJson);
+          processAgentEvent(event);
+        } catch (e) {
+          console.error("SSE parse error:", e);
         }
-        let warningsHtml = '';
-        if (ev.warnings && ev.warnings.length) {
-          warningsHtml = `<ul class="critic-warning-list">${ev.warnings.map(w => `<li><strong>${escapeHtml(w.type)}:</strong> ${escapeHtml(w.details || w.target)}</li>`).join('')}</ul>`;
-        }
-        auditEl.innerHTML = `
-          <div class="critic-header">
-            <span>${approved ? '✓ ADVERSARIAL CRITIC: APPROVED' : '⚠ ADVERSARIAL CRITIC: VIOLATION DETECTED'}</span>
-            <span class="critic-auditor">${escapeHtml(ev.auditor || 'Critic Engine')}</span>
-          </div>
-          <div class="critic-notes">${escapeHtml(ev.notes || '')}</div>
-          ${violationsHtml}
-          ${warningsHtml}
-        `;
-        stream.root.appendChild(auditEl);
-        scrollToBottom();
-        break;
-      }
-      case 'tool_call': {
-        stream.toolStack.classList.remove('hidden');
-        const step = ev.step || 1;
-        const toolName = ev.tool_name || 'tool';
-        const status = ev.status || 'running';
-        const args = ev.args || {};
-        const summary = ev.result_summary || '';
-
-        const key = `${step}_${toolName}`;
-        if (status === 'running') {
-          stream.statusLabel.innerText = `Step ${step}: running ${toolName}...`;
-          setRunState('running', `Step ${step}: ${toolName}...`);
-
-          const card = createToolRowElement(step, toolName, status, args, summary);
-          stream.toolInvocations.set(key, card);
-          stream.toolStack.appendChild(card);
-        } else {
-          const existingCard = stream.toolInvocations.get(key);
-          if (existingCard) {
-            updateToolRowElement(existingCard, step, toolName, status, args, summary);
-          } else {
-            const card = createToolRowElement(step, toolName, status, args, summary);
-            stream.toolStack.appendChild(card);
-          }
-          stream.statusLabel.innerText = `Step ${step}: observed ${toolName}`;
-          setRunState('running', `Step ${step}: observed ${toolName}`);
-        }
-        scrollToBottom();
-        break;
-      }
-
-      case 'thought': {
-        stream.reasoningDrawer.classList.remove('hidden');
-        stream.reasoningText.innerText += ev.content;
-        scrollToBottom();
-        break;
-      }
-
-      case 'plan_artifact': {
-        if (ev.columns && ev.rows) {
-          addArtifactToInspector(ev.columns, ev.rows);
-        }
-        break;
-      }
-
-      case 'final_answer': {
-        stream.proseOutput.classList.remove('hidden');
-        stream.proseOutput.innerHTML = safeMarkdown(ev.content);
-        stream.statusLabel.innerText = ev.converged ? 'Goal reached & converged' : 'Execution incomplete';
-
-        stream.terminalBanner.classList.remove('hidden');
-        if (ev.converged) {
-          stream.terminalBanner.className = 'terminal-state-banner converged';
-          stream.terminalBanner.innerHTML = `
-            <span>✓ Goal Reached &amp; Converged</span>
-            <span class="monospace" style="font-size: 10px;">Step ${ev.step}</span>
-          `;
-          setRunState('converged');
-        } else {
-          stream.terminalBanner.className = 'terminal-state-banner step-limit';
-          stream.terminalBanner.innerHTML = `
-            <span>⚠ Incomplete — Max Execution Steps Reached</span>
-            <span class="monospace" style="font-size: 10px;">Step ${ev.step}</span>
-          `;
-          setRunState('step-limit');
-        }
-        scrollToBottom();
-        break;
-      }
-
-      case 'error': {
-        const errorCard = document.createElement('div');
-        errorCard.className = 'terminal-state-banner interrupted';
-        errorCard.innerHTML = `
-          <span>✕ Runtime Error: ${escapeHtml(ev.message)}</span>
-          <span class="monospace" style="font-size: 10px;">Step ${ev.step || '?'}</span>
-        `;
-        stream.root.appendChild(errorCard);
-        scrollToBottom();
-        break;
-      }
-
-      case 'done': {
-        if (ev.session_id) {
-          state.activeSessionId = ev.session_id;
-          localStorage.setItem('limen_session_id', ev.session_id);
-        }
-        if (!ev.converged && state.runStatus !== 'step-limit') {
-          setRunState('step-limit');
-        } else if (ev.converged) {
-          setRunState('converged');
-        }
-        break;
       }
     }
   }
+}
 
-  function handleStreamDisconnect(stream, errorMsg) {
-    stream.terminalBanner.classList.remove('hidden');
-    stream.terminalBanner.className = 'terminal-state-banner interrupted';
-    stream.terminalBanner.innerHTML = `
-      <span>✕ ${escapeHtml(errorMsg)}</span>
-      <span class="monospace" style="font-size: 10px;">Transport Drop</span>
+function processAgentEvent(event) {
+  if (event.type === 'tool_call') {
+    appendTrace('tool', `[TOOL CALL] ${event.tool_name || event.tool}(${JSON.stringify(event.args || event.arguments || {})})`);
+  } else if (event.type === 'tool_result' || (event.type === 'tool_call' && event.status === 'success')) {
+    appendTrace('tool', `[OBSERVATION] Output received from ${event.tool_name || event.tool}`);
+    if (event.output && event.output.safe_route_found !== undefined) {
+      updateEvacCard(event.output);
+    }
+  } else if (event.type === 'critic_audit') {
+    const status = event.audit?.approved ? 'APPROVED' : 'REJECTED';
+    appendTrace('critic', `[CRITIC AUDIT] ${status}: ${event.audit?.notes || ''}`);
+  } else if (event.type === 'final_answer' || event.type === 'thought') {
+    if (event.content) {
+      appendTrace('assistant', event.content);
+    } else if (event.text) {
+      appendTrace('assistant', event.text);
+    }
+    refreshAllData();
+  } else if (event.type === 'error') {
+    appendTrace('error', event.message);
+  }
+}
+
+function updateEvacCard(routeResult) {
+  const card = document.getElementById('route-status-display');
+  if (!card) return;
+
+  if (routeResult.safe_route_found) {
+    card.innerHTML = `
+      <span class="tag-badge tag-success" style="align-self:flex-start;">CORRIDOR APPROVED</span>
+      <p style="font-size:11px; margin-top:4px;"><strong>Target:</strong> ${routeResult.destination_shelter_name} (${routeResult.destination_shelter_id})</p>
+      <p style="font-size:11px;"><strong>Distance:</strong> ${routeResult.distance_km} km | <strong>Path:</strong> ${routeResult.path_nodes.join(' → ')}</p>
+      <div style="font-size:10px; color:var(--ink-muted); margin-top:2px;">Invariants Checked: ${routeResult.closure_invariants_checked} closures verified clear.</div>
     `;
-    setRunState('interrupted', errorMsg);
-    scrollToBottom();
-  }
-
-  async function loadSessionsSidebarOnly() {
-    try {
-      const res = await fetch('/api/sessions');
-      if (res.ok) {
-        state.sessions = await res.json();
-        renderSidebarSessions();
-        renderTitlebarTabs();
-      }
-    } catch (e) {}
-  }
-
-  // ---------------------------------------------------------------------------
-  // Textarea Auto-Resize & Composer Keybindings (Section 15 Specification)
-  // ---------------------------------------------------------------------------
-  function autoResizeTextarea(textarea) {
-    textarea.style.height = 'auto';
-    textarea.style.height = Math.min(textarea.scrollHeight, 160) + 'px';
-  }
-
-  el.composerInput.addEventListener('input', () => autoResizeTextarea(el.composerInput));
-
-  el.composerInput.addEventListener('keydown', (e) => {
-    // Enter without shift submits; Shift+Enter creates newline
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      el.composerForm.dispatchEvent(new Event('submit', { cancelable: true }));
-    }
-  });
-
-  el.composerForm.addEventListener('submit', (e) => {
-    e.preventDefault();
-    const task = el.composerInput.value.trim();
-    if (task) {
-      executeAgentTask(task);
-    }
-  });
-
-  // Prompt templates from idle terminal card
-  document.querySelectorAll('.template-chip').forEach(chip => {
-    chip.addEventListener('click', () => {
-      const p = chip.dataset.prompt;
-      if (p) {
-        el.composerInput.value = p;
-        autoResizeTextarea(el.composerInput);
-        el.composerInput.focus();
-      }
-    });
-  });
-
-  // Global Shortcuts: Ctrl+K new tab
-  window.addEventListener('keydown', (e) => {
-    if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
-      e.preventDefault();
-      startNewSession();
-    }
-  });
-
-  el.btnNewTab.addEventListener('click', startNewSession);
-
-  const btnInjectChaos = document.getElementById('btn-inject-chaos');
-  const btnResetChaos = document.getElementById('btn-reset-chaos');
-  if (btnInjectChaos) {
-    btnInjectChaos.addEventListener('click', async () => {
-      const sel = document.getElementById('adversarial-select');
-      const scId = sel ? sel.value : 'SERVICE_OUTAGE_HTTP503';
-      try {
-        const res = await fetch('/api/adversarial/inject', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ scenario_id: scId }),
-        });
-        const data = await res.json();
-        showToast(`Injected: ${data.scenario}`, 'warning');
-      } catch (err) {
-        showToast(`Inject failed: ${err.message}`, 'error');
-      }
-    });
-  }
-  if (btnResetChaos) {
-    btnResetChaos.addEventListener('click', async () => {
-      try {
-        await fetch('/api/adversarial/reset', { method: 'POST' });
-        showToast('Adversarial conditions reset', 'success');
-      } catch (err) {
-        showToast(`Reset failed: ${err.message}`, 'error');
-      }
-    });
-  }
-
-  // Rail View Toggles
-  el.railBtnSessions.addEventListener('click', () => {
-    el.workbenchSidebar.classList.toggle('collapsed');
-  });
-  el.railBtnTools.addEventListener('click', () => {
-    el.paneInspector.classList.remove('hidden-pane');
-    el.btnToggleInspector.classList.add('active');
-    switchInspectorTab('tool_call');
-  });
-  el.railBtnTelemetry.addEventListener('click', () => {
-    el.paneInspector.classList.remove('hidden-pane');
-    el.btnToggleInspector.classList.add('active');
-    switchInspectorTab('telemetry');
-  });
-  el.railBtnSettings.addEventListener('click', openSettingsModal);
-
-  // ---------------------------------------------------------------------------
-  // Settings Modal Controls
-  // ---------------------------------------------------------------------------
-  function openSettingsModal() {
-    el.modalSettings.classList.remove('hidden');
-    el.cfgProviderUrl.value = state.config.provider_url;
-    el.cfgApiKey.value = state.config.api_key;
-    el.cfgMaxSteps.value = state.config.max_steps;
-    renderSettingsModelsList();
-  }
-
-  function closeSettingsModal() {
-    el.modalSettings.classList.add('hidden');
-  }
-
-  el.btnOpenSettings.addEventListener('click', openSettingsModal);
-  el.btnCloseSettings.addEventListener('click', closeSettingsModal);
-  el.btnCancelSettings.addEventListener('click', closeSettingsModal);
-
-  el.btnAddModel.addEventListener('click', () => {
-    const val = el.inputAddModel.value.trim();
-    if (val && !state.config.custom_models.includes(val)) {
-      state.config.custom_models.push(val);
-      renderSettingsModelsList();
-      el.inputAddModel.value = '';
-    }
-  });
-
-  el.btnPingGateway.addEventListener('click', async () => {
-    el.diagnosticLog.className = 'diagnostic-log';
-    el.diagnosticLog.innerText = `Pinging ${el.cfgProviderUrl.value}...`;
-    const res = await checkGatewayHealth();
-    if (res.ok) {
-      el.diagnosticLog.className = 'diagnostic-log success';
-      el.diagnosticLog.innerText = `Status 200 OK: ${res.message}\nDiscovered Models:\n${(res.discovered_models || []).slice(0, 6).join(', ')}`;
-    } else {
-      el.diagnosticLog.className = 'diagnostic-log error';
-      el.diagnosticLog.innerText = `Connection Failed: ${res.message}`;
-    }
-  });
-
-  el.btnSaveSettings.addEventListener('click', async () => {
-    const payload = {
-      provider_url: el.cfgProviderUrl.value.trim(),
-      api_key: el.cfgApiKey.value.trim(),
-      max_steps: parseInt(el.cfgMaxSteps.value, 10) || 8,
-      custom_models: state.config.custom_models
-    };
-
-    try {
-      const res = await fetch('/api/config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-
-      state.config.provider_url = payload.provider_url;
-      state.config.api_key = payload.api_key;
-      state.config.max_steps = payload.max_steps;
-      updateUIWithConfig();
-      closeSettingsModal();
-      showToast('Configuration applied', 'success');
-      await checkGatewayHealth();
-    } catch (err) {
-      showToast(`Save failed: ${err.message}`, 'error');
-    }
-  });
-
-  el.btnTitlebarPing.addEventListener('click', async () => {
-    const res = await checkGatewayHealth();
-    showToast(res.ok ? 'Gateway is online' : 'Gateway is offline', res.ok ? 'success' : 'error');
-  });
-
-  // ---------------------------------------------------------------------------
-  // Deterministic Fixtures Harness
-  // ---------------------------------------------------------------------------
-  window.limenFixtures = {
-    loadIdleState: () => {
-      startNewSession();
-    },
-
-    loadRunningState: () => {
-      el.idleTerminalCard.classList.add('hidden');
-      el.executionStreamList.innerHTML = '';
-      renderUserTurnDOM('Check stock_level against reorder_threshold and calculate deficit unit cost.', Date.now() / 1000 - 10);
-      updateStepCounter(2);
-
-      const stream = createStreamingTurnDOM();
-      stream.reasoningDrawer.classList.remove('hidden');
-      stream.reasoningText.innerText = 'Querying database parameters to check if reorder threshold has been breached.';
-
-      stream.toolStack.classList.remove('hidden');
-      stream.toolStack.appendChild(createToolRowElement(1, 'mock_lookup', 'success', { key: 'stock_level' }, '30'));
-      stream.toolStack.appendChild(createToolRowElement(1, 'mock_lookup', 'success', { key: 'reorder_threshold' }, '50'));
-      stream.toolStack.appendChild(createToolRowElement(2, 'calculator', 'running', { expression: '50 - 30' }, ''));
-
-      setRunState('running', 'Step 2: calculating deficit...');
-      scrollToBottom(true);
-    },
-
-    loadConvergedSuccessState: () => {
-      el.idleTerminalCard.classList.add('hidden');
-      el.executionStreamList.innerHTML = '';
-      renderUserTurnDOM('Look up unit_cost and item_count in the database, calculate total valuation, and apply 10% discount.', Date.now() / 1000 - 60);
-      updateStepCounter(4);
-
-      const stream = createStreamingTurnDOM();
-      stream.root.classList.remove('streaming');
-      stream.statusLabel.innerText = 'Execution converged';
-
-      stream.reasoningDrawer.classList.remove('hidden');
-      stream.reasoningText.innerText = 'Step 1: Extracted unit_cost (150) and item_count (42).\nStep 2: Calculated gross inventory (150 * 42 = 6300).\nStep 3: Applied 10% discount resulting in net valuation of $5,670.';
-
-      stream.toolStack.classList.remove('hidden');
-      stream.toolStack.appendChild(createToolRowElement(1, 'mock_lookup', 'success', { key: 'unit_cost' }, '150'));
-      stream.toolStack.appendChild(createToolRowElement(1, 'mock_lookup', 'success', { key: 'item_count' }, '42'));
-      stream.toolStack.appendChild(createToolRowElement(2, 'calculator', 'success', { expression: '150 * 42' }, '6300'));
-      stream.toolStack.appendChild(createToolRowElement(3, 'calculator', 'success', { expression: '6300 * 0.90' }, '5670.0'));
-
-      addArtifactToInspector(
-        ['Metric', 'Parameter', 'Computed Value', 'Status'],
-        [
-          { Metric: 'Unit Cost', Parameter: 'unit_cost', 'Computed Value': '$150.00', Status: 'Verified' },
-          { Metric: 'Item Count', Parameter: 'item_count', 'Computed Value': '42 units', Status: 'Verified' },
-          { Metric: 'Gross Valuation', Parameter: '150 * 42', 'Computed Value': '$6,300.00', Status: 'Calculated' },
-          { Metric: 'Net Valuation', Parameter: '10% Discount', 'Computed Value': '$5,670.00', Status: 'Final' }
-        ]
-      );
-
-      stream.proseOutput.classList.remove('hidden');
-      stream.proseOutput.innerHTML = safeMarkdown(`### Inventory Valuation Summary\nRetrieved database parameters: **42 units** at **$150 unit cost**.\n\n* **Gross Valuation:** $6,300.00\n* **10% Discount:** -$630.00\n* **Final Net Valuation:** **$5,670.00**`);
-
-      stream.terminalBanner.classList.remove('hidden');
-      stream.terminalBanner.className = 'terminal-state-banner converged';
-      stream.terminalBanner.innerHTML = `
-        <span>✓ Goal Reached &amp; Converged</span>
-        <span class="monospace" style="font-size: 10px;">Step 4</span>
-      `;
-
-      setRunState('converged');
-      scrollToBottom(true);
-    },
-
-    loadFailureRecoveryState: () => {
-      el.idleTerminalCard.classList.add('hidden');
-      el.executionStreamList.innerHTML = '';
-      renderUserTurnDOM('Look up secret_metric in the database. If retrieved, calculate double its value.', Date.now() / 1000 - 40);
-      updateStepCounter(2);
-
-      const stream = createStreamingTurnDOM();
-      stream.root.classList.remove('streaming');
-      stream.statusLabel.innerText = 'Tool failure observed honestly';
-
-      stream.reasoningDrawer.classList.remove('hidden');
-      stream.reasoningText.innerText = 'Lookup for `secret_metric` failed with DatabaseConnectionTimeout. Acknowledging failure without fabricating values.';
-
-      stream.toolStack.classList.remove('hidden');
-      stream.toolStack.appendChild(createToolRowElement(1, 'mock_lookup', 'error', { key: 'secret_metric' }, "DatabaseConnectionTimeout: Gateway failed to respond for key 'secret_metric' after 30s."));
-
-      stream.proseOutput.classList.remove('hidden');
-      stream.proseOutput.innerHTML = safeMarkdown(`### Execution Report: Database Timeout Observed\n\nThe query for \`secret_metric\` failed due to an external database gateway timeout.\n\nBecause the underlying parameter could not be retrieved, no subsequent arithmetic operations were performed.`);
-
-      stream.terminalBanner.classList.remove('hidden');
-      stream.terminalBanner.className = 'terminal-state-banner converged';
-      stream.terminalBanner.innerHTML = `
-        <span>✓ Handled Honest Tool Failure</span>
-        <span class="monospace" style="font-size: 10px;">Step 2</span>
-      `;
-
-      setRunState('converged');
-      scrollToBottom(true);
-    },
-
-    loadNonConvergenceState: () => {
-      el.idleTerminalCard.classList.add('hidden');
-      el.executionStreamList.innerHTML = '';
-      renderUserTurnDOM('Iterate until epsilon < 0.00001 is satisfied.', Date.now() / 1000 - 90);
-      updateStepCounter(8);
-
-      const stream = createStreamingTurnDOM();
-      stream.root.classList.remove('streaming');
-      stream.statusLabel.innerText = 'Max step limit reached';
-
-      stream.reasoningDrawer.classList.remove('hidden');
-      stream.reasoningText.innerText = 'Maximum steps (8) reached without reaching mathematical convergence.';
-
-      stream.toolStack.classList.remove('hidden');
-      for (let i = 1; i <= 4; i++) {
-        stream.toolStack.appendChild(createToolRowElement(i, 'calculator', 'success', { expression: `1.0 / ${i}` }, String(1.0 / i)));
-      }
-
-      stream.proseOutput.classList.remove('hidden');
-      stream.proseOutput.innerHTML = safeMarkdown(`Agent reached maximum execution steps (8) without reaching a final conclusion.`);
-
-      stream.terminalBanner.classList.remove('hidden');
-      stream.terminalBanner.className = 'terminal-state-banner step-limit';
-      stream.terminalBanner.innerHTML = `
-        <span>⚠ Incomplete — Max Execution Steps Reached</span>
-        <span class="monospace" style="font-size: 10px;">Step 8</span>
-      `;
-
-      setRunState('step-limit');
-      scrollToBottom(true);
-    }
-  };
-
-  // ---------------------------------------------------------------------------
-  // Initialization
-  // ---------------------------------------------------------------------------
-  async function init() {
-    await loadConfig();
-    await loadSessions();
-
-    const urlParams = new URLSearchParams(window.location.search);
-    const fixture = urlParams.get('fixture');
-    if (fixture === 'idle' || urlParams.has('new')) {
-      window.limenFixtures.loadIdleState();
-    } else if (fixture === 'running') {
-      window.limenFixtures.loadRunningState();
-    } else if (fixture === 'success') {
-      window.limenFixtures.loadConvergedSuccessState();
-    } else if (fixture === 'failure') {
-      window.limenFixtures.loadFailureRecoveryState();
-    } else if (fixture === 'step_limit') {
-      window.limenFixtures.loadNonConvergenceState();
-    }
-  }
-
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', init);
   } else {
-    init();
+    card.innerHTML = `
+      <span class="tag-badge tag-danger" style="align-self:flex-start;">FAIL-CLOSED: NO SAFE ROUTE</span>
+      <p style="font-size:11px; color:var(--coral); margin-top:4px;">${routeResult.reason}</p>
+      <div style="font-size:10px; color:var(--amber); margin-top:2px;">ACTION: ${routeResult.action_required || 'Flag stranded area for air rescue.'}</div>
+    `;
   }
-})();
+}
+
+function appendTrace(role, text) {
+  const log = document.getElementById('agent-trace-log');
+  if (!log) return;
+
+  const div = document.createElement('div');
+  div.className = `log-entry ${role}`;
+  div.textContent = text;
+  log.appendChild(div);
+  log.scrollTop = log.scrollHeight;
+}
+
+function handleItemSelection(data) {
+  appendTrace('system', `Selected target on globe: ${data.title || data.id} (${data.category || 'hazard'})`);
+  if (data.id === 'VIZAG-EQ-7.1-EX') {
+    document.getElementById('btn-mode-exercise').click();
+  }
+}
