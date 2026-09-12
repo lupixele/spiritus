@@ -639,36 +639,68 @@ function updateEvacCard(routeResult) {
   }
 }
 
+let currentAssistantMsgEl = null;
+
 function appendTrace(role, text) {
   const thread = document.getElementById('chat-messages-thread');
   if (!thread) return;
+
+  // Streaming continuation: if consecutive assistant chunks arrive, append to existing bubble
+  if (role === 'assistant' && currentAssistantMsgEl) {
+    const body = currentAssistantMsgEl.querySelector('.msg-body');
+    if (body) {
+      body.innerHTML = formatMarkdown(text);
+      thread.scrollTop = thread.scrollHeight;
+      return;
+    }
+  }
 
   const msgDiv = document.createElement('div');
   msgDiv.className = `chat-message ${role}-message`;
 
   let author = 'SPIRITUS AGENT';
+  let badgeClass = 'badge-assistant';
   let timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
   if (role === 'user') {
     author = 'INCIDENT COMMANDER';
+    badgeClass = 'badge-user';
+    currentAssistantMsgEl = null;
   } else if (role === 'tool') {
     author = 'TOOL OBSERVER';
+    badgeClass = 'badge-tool';
   } else if (role === 'critic') {
     author = 'SAFETY CRITIC AUDITOR';
+    badgeClass = 'badge-critic';
   } else if (role === 'error') {
     author = 'SYSTEM ERROR';
+    badgeClass = 'badge-critic';
+  } else if (role === 'assistant') {
+    currentAssistantMsgEl = msgDiv;
   }
 
   msgDiv.innerHTML = `
     <div class="msg-header">
-      <span class="msg-author">${author}</span>
+      <span class="msg-badge ${badgeClass}">${author}</span>
       <span class="msg-time">${timeStr}</span>
     </div>
-    <div class="msg-body">${escapeHtml(text)}</div>
+    <div class="msg-body">${formatMarkdown(text)}</div>
   `;
 
   thread.appendChild(msgDiv);
   thread.scrollTop = thread.scrollHeight;
+}
+
+function formatMarkdown(str) {
+  if (typeof str !== 'string') str = JSON.stringify(str, null, 2);
+  let html = escapeHtml(str);
+  // Bold **text**
+  html = html.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+  // Inline code `text`
+  html = html.replace(/`(.*?)`/g, '<code>$1</code>');
+  // Line break bullets
+  html = html.replace(/\n\s*-\s+(.*)/g, '<br>• $1');
+  return html;
 }
 
 function escapeHtml(str) {
